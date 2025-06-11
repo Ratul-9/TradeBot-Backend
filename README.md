@@ -94,23 +94,15 @@ This project is a **virtual stock trading platform** built with Django, Django R
     DATABASES = {
         'default': {
             'ENGINE': 'django.db.backends.postgresql',
-            'NAME': 'mydb',
-            'USER': 'postgres',
-            'PASSWORD': 'Rrr@300423',
+            'NAME': 'your_db_name',
+            'USER': 'your_user_name',
+            'PASSWORD': 'your_password',
             'HOST': 'localhost',
             'PORT': '5432',
         }
     }
     ```
 
-    Make sure these match your local PostgreSQL setup. Create the database if it doesn't exist:
-
-    ```sh
-    psql -U postgres
-    CREATE DATABASE mydb;
-    ```
-
-    Change `USER` and `PASSWORD` as needed.
 
 3. **Redis Setup (for Celery)**
 
@@ -150,11 +142,11 @@ This project is a **virtual stock trading platform** built with Django, Django R
     python manage.py runserver
     ```
 
-    The API is now accessible at [http://localhost:8000](http://localhost:8000).
+    The API is now accessible at [http://localhost:8000](http://127.0.0.0.0.1:8000).
 
 2. **Access the Django Admin**
 
-    Go to [http://localhost:8000/admin/](http://localhost:8000/admin/) and log in with your superuser credentials.
+    Go to [http://127.0.0.0.1.0:8000/admin/](http://127.0.0.0.0.1:800/admin/) and log in with your superuser credentials.
 
 ---
 
