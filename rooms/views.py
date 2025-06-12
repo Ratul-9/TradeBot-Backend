@@ -19,12 +19,15 @@ class CreateRoomView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self,request):
+        if not request.user.is_staff:
+            return Response(
+                {"detail": "Only staff members can create rooms."},
+                status=status.HTTP_403_FORBIDDEN
+            )
         data = request.data.copy()
-        data['admin'] = request.user.id
-
         serializer = RoomSerializer(data=data)
         if serializer.is_valid():
-            serializer.save()
+            serializer.save(admin=request.user)
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         else:
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
