@@ -1,3 +1,370 @@
-from django.shortcuts import render
+from rest_framework.views import APIView
+from django.utils import timezone
+from rest_framework.response import Response
+from rest_framework.permissions import IsAuthenticated
+from django.db import models
+from django.db.models import Sum
+from rest_framework import status
+from django.shortcuts import get_object_or_404
+from .models import Room, RoomParticipant, UserBalance, Trade
+from .serializers import RoomSerializer, JoinRoomSerializer, LeaveRoomSerializer, LiveRoomStatusSerializer
+from django.contrib.auth import get_user_model
+from rest_framework import permissions, status
+from transactions.models import Transaction, Portfolio, PendingOrder
+from decimal import Decimal
+from django.db.models import Sum, F, Case, When, DecimalField
+User = get_user_model()
 
-# Create your views here.
+class CreateRoomView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self,request):
+        data = request.data.copy()
+        data['admin'] = request.user.id
+
+        serializer = RoomSerializer(data=data)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        else:
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        
+class JoinRoomView(APIView):
+     permission_classes = [IsAuthenticated]
+     def post(self, request):
+        serializer = JoinRoomSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        room_id = serializer.validated_data['room_id']
+        password = serializer.validated_data.get('password', '')
+
+        try:
+            room = Room.objects.get(id=room_id)
+        except Room.DoesNotExist:
+            return Response({'error': 'Room does not exist'}, status=status.HTTP_404_NOT_FOUND)
+
+        if room.password and room.password != password:
+            return Response({'error': 'Incorrect password'}, status=status.HTTP_403_FORBIDDEN)
+
+        user = request.user
+
+        # Check if user is already an active participant
+        participant, created = RoomParticipant.objects.get_or_create(
+            user=user,
+            room=room,
+            defaults={'join_time': timezone.now(), 'is_active': True}
+        )
+        if not created:
+            # If participant exists but inactive, reactivate and update join_time
+            if not participant.is_active:
+                participant.is_active = True
+                participant.join_time = timezone.now()
+                participant.leave_time = None
+                participant.save()
+
+        # Create or reset UserBalance
+        user_balance, balance_created = UserBalance.objects.get_or_create(
+            user=user,
+            room=room,
+            defaults={'cash_balance': 100000.00}  # initial virtual balance
+        )
+        if not balance_created:
+            user_balance.cash_balance = 100000.00  # reset balance on re-join if needed
+            user_balance.save()
+
+        return Response({'message': f'Joined room "{room.name}" successfully.'}, status=status.HTTP_200_OK)
+     
+class LeaveRoomView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        serializer = LeaveRoomSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        room_id = serializer.validated_data['room_id']
+        user = request.user
+
+        try:
+            participant = RoomParticipant.objects.get(user=user, room_id=room_id, is_active=True)
+        except RoomParticipant.DoesNotExist:
+            return Response({'error': 'You are not an active participant of this room.'}, status=status.HTTP_404_NOT_FOUND)
+
+        participant.is_active = False
+        participant.leave_time = timezone.now()
+        participant.save()
+
+        return Response({'message': f'You have successfully left the room.'}, status=status.HTTP_200_OK)
+    
+class RoomDetailView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, room_id):
+        try:
+            room = Room.objects.get(id=room_id)
+        except Room.DoesNotExist:
+            return Response({'error': 'Room not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        participants = RoomParticipant.objects.filter(room=room, is_active=True)
+        participant_data = []
+
+        for participant in participants:
+            balance = UserBalance.objects.filter(user=participant.user, room=room).first()
+            participant_data.append({
+                'username': participant.user.username,
+                'cash_balance': str(balance.cash_balance) if balance else "0.00",
+                'join_time': participant.join_time,
+            })
+
+        room_info = {
+            'room_name': room.name,
+            'admin': room.admin.username,
+            'start_time': room.start_time,
+            'end_time': room.end_time,
+            'active_participants': participant_data
+        }
+
+        return Response(room_info, status=status.HTTP_200_OK)
+    
+class RoomTradeBuyView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request, room_id):
+        try:
+            user = request.user
+            data = request.data
+
+            # Check room existence
+            room = Room.objects.filter(id=room_id).first()
+            if not room:
+                return Response({"error": "Room not found"}, status=status.HTTP_404_NOT_FOUND)
+
+            # Check if room is active
+            now = timezone.now()
+            if not (room.start_time and room.end_time and room.start_time <= now <= room.end_time):
+                return Response({"error": "Room is not active"}, status=status.HTTP_403_FORBIDDEN)
+
+            # Check participant
+            participant = RoomParticipant.objects.filter(user=user, room=room, is_active=True).first()
+            if not participant:
+                return Response({"error": "You are not an active participant in this room"}, status=status.HTTP_403_FORBIDDEN)
+
+            # Validate data
+            symbol = data.get("symbol")
+            quantity = int(data.get("quantity", 0))
+            price_per_stock = Decimal(data.get("price_per_stock", 0))
+
+            if not symbol or quantity <= 0 or price_per_stock <= 0:
+                return Response({"error": "Invalid input"}, status=status.HTTP_400_BAD_REQUEST)
+
+            total_price = quantity * price_per_stock
+
+            # Check user balance for room
+            user_balance = UserBalance.objects.filter(user=user, room=room).first()
+            if not user_balance:
+                return Response({"error": "User balance not found for this room"}, status=status.HTTP_404_NOT_FOUND)
+
+            if user_balance.cash_balance < total_price:
+                return Response({"error": "Insufficient balance in this room"}, status=status.HTTP_400_BAD_REQUEST)
+
+            # Deduct balance
+            user_balance.cash_balance -= total_price
+            user_balance.save()
+
+            # Create trade
+            trade = Trade.objects.create(
+                user=user,
+                room=room,
+                trade_type="BUY",
+                symbol=symbol,
+                quantity=quantity,
+                price=price_per_stock,
+            )
+
+            return Response({"message": "Trade executed successfully", "trade_id": trade.id}, status=status.HTTP_201_CREATED)
+
+        except Exception as e:
+            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class RoomTradeSellView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request, room_id):
+        try:
+            user = request.user
+            data = request.data
+
+            # Check room
+            room = Room.objects.filter(id=room_id).first()
+            if not room:
+                return Response({"error": "Room not found"}, status=status.HTTP_404_NOT_FOUND)
+
+            # Check active time
+            now = timezone.now()
+            if not (room.start_time and room.end_time and room.start_time <= now <= room.end_time):
+                return Response({"error": "Room is not active"}, status=status.HTTP_403_FORBIDDEN)
+
+            # Participant check
+            participant = RoomParticipant.objects.filter(user=user, room=room, is_active=True).first()
+            if not participant:
+                return Response({"error": "You are not an active participant in this room"}, status=status.HTTP_403_FORBIDDEN)
+
+            symbol = data.get("symbol")
+            quantity = int(data.get("quantity", 0))
+            price_per_stock = Decimal(data.get("price_per_stock", 0))
+
+            if not symbol or quantity <= 0 or price_per_stock <= 0:
+                return Response({"error": "Invalid input"}, status=status.HTTP_400_BAD_REQUEST)
+
+            # Check user's previous BUY trades for the symbol in this room
+            total_bought = Trade.objects.filter(user=user, room=room, symbol=symbol, trade_type="BUY").aggregate(total=models.Sum("quantity"))["total"] or 0
+            total_sold = Trade.objects.filter(user=user, room=room, symbol=symbol, trade_type="SELL").aggregate(total=models.Sum("quantity"))["total"] or 0
+
+            available_quantity = total_bought - total_sold
+
+            if available_quantity < quantity:
+                return Response({"error": "Not enough holdings to sell"}, status=status.HTTP_400_BAD_REQUEST)
+
+            # Add balance
+            total_price = quantity * price_per_stock
+            user_balance = UserBalance.objects.filter(user=user, room=room).first()
+
+            if not user_balance:
+                return Response({"error": "User balance not found for this room"}, status=status.HTTP_404_NOT_FOUND)
+
+            user_balance.cash_balance += total_price
+            user_balance.save()
+
+            # Record trade
+            trade = Trade.objects.create(
+                user=user,
+                room=room,
+                trade_type="SELL",
+                symbol=symbol,
+                quantity=quantity,
+                price=price_per_stock,
+            )
+
+            return Response({"message": "Sell trade executed successfully", "trade_id": trade.id}, status=status.HTTP_201_CREATED)
+
+        except Exception as e:
+            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+class RoomLeaderboardView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, room_id):
+        try:
+            room = Room.objects.get(id=room_id)
+        except Room.DoesNotExist:
+            return Response({"error": "Room not found"}, status=404)
+
+        participants = RoomParticipant.objects.filter(room=room, is_active=True)
+        leaderboard = []
+
+        for participant in participants:
+            user = participant.user
+            trades = Trade.objects.filter(user=user, room=room)
+
+            pnl = 0
+            for trade in trades:
+                if trade.trade_type == Trade.BUY:
+                    pnl -= trade.quantity * float(trade.price)
+                elif trade.trade_type == Trade.SELL:
+                    pnl += trade.quantity * float(trade.price)
+
+            try:
+                balance = UserBalance.objects.get(user=user, room=room)
+                total_value = pnl + float(balance.cash_balance)
+            except UserBalance.DoesNotExist:
+                total_value = pnl
+
+            leaderboard.append({
+                "username": user.username,
+                "net_worth": round(total_value, 2)
+            })
+
+        leaderboard.sort(key=lambda x: x["net_worth"], reverse=True)
+
+        return Response({"room": room.name, "leaderboard": leaderboard}, status=200)
+    
+class RoomTradeHistoryView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, room_id):
+        try:
+            room = Room.objects.get(id=room_id)
+        except Room.DoesNotExist:
+            return Response({"error": "Room not found"}, status=404)
+
+        user = request.user
+        trades = Trade.objects.filter(user=user, room=room).order_by("-timestamp")
+
+        trade_history = [
+            {
+                "symbol": trade.symbol,
+                "trade_type": trade.trade_type,
+                "quantity": trade.quantity,
+                "price": str(trade.price),
+                "timestamp": trade.timestamp,
+            }
+            for trade in trades
+        ]
+
+        return Response({
+            "room": room.name,
+            "username": user.username,
+            "trade_history": trade_history
+        }, status=200)
+    
+class LiveRoomStatusView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request, room_id):
+        room = get_object_or_404(Room, id=room_id)
+
+        # Check if request.user is the admin of this room
+        if request.user != room.admin:
+            return Response({"error": "You are not authorized to view this room's status."}, status=status.HTTP_403_FORBIDDEN)
+
+        # Get active participants
+        active_participants = RoomParticipant.objects.filter(room=room, is_active=True)
+
+        participants_data = []
+
+        for participant in active_participants:
+            user = participant.user
+            # Get user balance for this room
+            user_balance_obj = UserBalance.objects.filter(user=user, room=room).first()
+            cash_balance = user_balance_obj.cash_balance if user_balance_obj else 0
+
+            # Calculate total bought and total sold by summing Transactions
+            trades = Transaction.objects.filter(user=user, room=room)
+
+            total_bought = trades.filter(transaction_type="BUY").aggregate(
+                total=Sum(F('quantity') * F('price_per_stock'), output_field=DecimalField())
+            )['total'] or 0
+
+            total_sold = trades.filter(transaction_type="SELL").aggregate(
+                total=Sum(F('quantity') * F('price_per_stock'), output_field=DecimalField())
+            )['total'] or 0
+
+            profit_loss = total_sold - total_bought
+
+            participants_data.append({
+                "username": user.username,
+                "cash_balance": cash_balance,
+                "total_bought": total_bought,
+                "total_sold": total_sold,
+                "profit_loss": profit_loss,
+            })
+
+        response_data = {
+            "room_name": room.name,
+            "participants": participants_data
+        }
+
+        serializer = LiveRoomStatusSerializer(response_data)
+        return Response(serializer.data, status=status.HTTP_200_OK)
