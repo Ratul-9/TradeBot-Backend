@@ -47,6 +47,7 @@ INSTALLED_APPS = [
     'users',
     'stocks',
     'transactions',
+    'rooms',
 ]
 
 AUTH_USER_MODEL = 'users.CustomUser'
