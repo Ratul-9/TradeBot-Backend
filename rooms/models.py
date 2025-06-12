@@ -7,7 +7,6 @@ User = get_user_model()
 class Room(models.Model):
     name = models.CharField(max_length=100)
     password = models.CharField(max_length=50, blank=True, null=True)
-    admin = models.ForeignKey(User, on_delete=models.CASCADE, related_name='admin_rooms')
     start_time = models.DateTimeField(null=True, blank=True)
     end_time = models.DateTimeField(null=True, blank=True)
 
