@@ -9,15 +9,26 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework_simplejwt.tokens import RefreshToken
 from django.contrib.auth import authenticate
 from rest_framework import status
+
+from users import serializers
 User = get_user_model()
 
 class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
     def validate(self, attrs):
         data = super().validate(attrs)
-        data['username'] = self.user.username
-        data['email'] = self.user.email
-        data['virtual_balance'] = self.user.virtual_balance
+        user = self.user
+        if not user:
+            raise serializers.ValidationError("No User found. Please check credentials")
+        
+
+        if not user.is_active:
+            raise serializers.ValidationError("Please verify your email before logging in.")
+
+        data['username'] = user.username
+        data['email'] = user.email
+        data['virtual_balance'] = user.virtual_balance
         return data
+
 
 class CustomTokenObtainPairView(TokenObtainPairView):
     serializer_class = CustomTokenObtainPairSerializer
@@ -60,3 +71,24 @@ class GetUserBalance(APIView):
     def get(self, request):
         user = request.user
         return Response({"username": user.username, "virtual_balance": user.virtual_balance, "isSuperUser": user.is_superuser})
+
+
+from django.utils.http import urlsafe_base64_decode
+from django.contrib.auth.tokens import default_token_generator
+
+class VerifyEmailView(APIView):
+    permission_classes = [permissions.AllowAny]
+
+    def get(self, request, uidb64, token):
+        try:
+            uid = urlsafe_base64_decode(uidb64).decode()
+            user = User.objects.get(pk=uid)
+        except (TypeError, ValueError, OverflowError, User.DoesNotExist):
+            return Response({'error': 'Invalid verification link'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if default_token_generator.check_token(user, token):
+            user.is_active = True
+            user.save()
+            return Response({'message': 'Email successfully verified!'}, status=status.HTTP_200_OK)
+        else:
+            return Response({'error': 'Invalid or expired token'}, status=status.HTTP_400_BAD_REQUEST)
