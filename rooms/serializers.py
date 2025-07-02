@@ -3,6 +3,7 @@ from .models import Room, RoomParticipant, UserBalance
 from transactions.models import Transaction
 from django.db.models import Sum, F, Case, When, DecimalField
 
+
 class RoomSerializer(serializers.ModelSerializer):
     admin_username = serializers.CharField(source='admin.username', read_only=True)
 
@@ -32,3 +33,4 @@ class ParticipantTradeSummarySerializer(serializers.Serializer):
 class LiveRoomStatusSerializer(serializers.Serializer):
     room_name = serializers.CharField()
     participants = ParticipantTradeSummarySerializer(many=True)
+
