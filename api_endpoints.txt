@@ -1,0 +1,157 @@
+API ENDPOINTS: -
+
+
+Admin: - https://6d2c-2405-201-8020-f826-6042-3169-dd53-a197.ngrok-free.app/admin/
+
+Register: - https://6d2c-2405-201-8020-f826-6042-3169-dd53-a197.ngrok-free.app/api/users/register/
+Body: {
+    "Username",
+    "email",
+    "Password"
+}
+
+Login: - https://6d2c-2405-201-8020-f826-6042-3169-dd53-a197.ngrok-free.app/api/users/login/
+Body: {
+    "Username",
+    "Password"
+}
+
+
+Profile: - https://6d2c-2405-201-8020-f826-6042-3169-dd53-a197.ngrok-free.app/api/users/profile/
+Body: {
+    "Username",
+    "Password"
+}, Headers: {
+    "Authorization" : Bearer <access token>
+}
+
+
+User Balancex: - https://6d2c-2405-201-8020-f826-6042-3169-dd53-a197.ngrok-free.app//api/users/user/balance/
+Body: {
+    "Username",
+    "Password"
+}, Headers: {
+    "Authorization" : Bearer <access token>
+}
+
+
+Verify Email: - https://6d2c-2405-201-8020-f826-6042-3169-dd53-a197.ngrok-free.app/api/users/verify-email/<uidb64>/<token>/
+
+Buy: - https://6d2c-2405-201-8020-f826-6042-3169-dd53-a197.ngrok-free.app/api/transactions/buy/
+Body: {
+    "symbol",
+    "quantity",
+    "price_per_stock",
+}, Headers: {
+    "Authorization" : Bearer <access token>
+}
+
+
+Sell: - https://6d2c-2405-201-8020-f826-6042-3169-dd53-a197.ngrok-free.app/api/transactions/sell
+Body: {
+    "symbol",
+    "quantity",
+    "price_per_stock",
+}, Headers: {
+    "Authorization" : Bearer <access token>
+}
+
+
+
+History: - https://6d2c-2405-201-8020-f826-6042-3169-dd53-a197.ngrok-free.app/api/transactions/history/
+Headers: {
+    "Authorization" : Bearer <access token>
+}
+
+Portfolio: - https://6d2c-2405-201-8020-f826-6042-3169-dd53-a197.ngrok-free.app/api/transactions/portfolio/
+Headers: {
+    "Authorization" : Bearer <access token>
+}
+OrderBook: - https://6d2c-2405-201-8020-f826-6042-3169-dd53-a197.ngrok-free.app/api/transactions/order-book/
+Headers: {
+    "Authorization" : Bearer <access token>
+}
+
+Price: - https://6d2c-2405-201-8020-f826-6042-3169-dd53-a197.ngrok-free.app/api/stocks/price/<str:symbol>/
+Headers: {
+    "Authorization" : Bearer <access token>
+}
+
+
+History: - https://6d2c-2405-201-8020-f826-6042-3169-dd53-a197.ngrok-free.app/api/stocks/history/<str:symbol>/
+Headers: {
+    "Authorization" : Bearer <access token>
+}
+
+
+Search: - https://6d2c-2405-201-8020-f826-6042-3169-dd53-a197.ngrok-free.app/api/stocks/search/
+Headers: {
+    "Authorization" : Bearer <access token>
+}
+
+
+
+create: - https://6d2c-2405-201-8020-f826-6042-3169-dd53-a197.ngrok-free.app/api/rooms/create/
+Body:{
+    "Name":,
+    "Password":,
+    "start_time":,
+    "end_time":,
+}, Headers: {
+    "Authorization" : Bearer <access token>
+}
+join: - https://6d2c-2405-201-8020-f826-6042-3169-dd53-a197.ngrok-free.app/api/rooms/<int:room_id>/join/
+Body:{
+    "room_id":,
+    "password":,
+}, Headers: {
+    "Authorization" : Bearer <access token>
+}
+leave: - https://6d2c-2405-201-8020-f826-6042-3169-dd53-a197.ngrok-free.app/api/rooms/<int:room_id>/leave/<int:room_id>/leave/
+Body: {
+    "room_id"
+}  Headers: {
+      "Authorization" : Bearer <access token>
+   }
+details: - https://6d2c-2405-201-8020-f826-6042-3169-dd53-a197.ngrok-free.app/api/rooms/<int:room_id>/details/
+Headers: {
+      "Authorization" : Bearer <access token>
+   }
+
+
+buy: - https://6d2c-2405-201-8020-f826-6042-3169-dd53-a197.ngrok-free.app/api/rooms/<int:room_id>/buy/
+Body: {
+    "symbol":,
+    "quantity":,
+    "price_per_stock":
+}  Headers: {
+      "Authorization" : Bearer <access token>
+   }
+
+
+sell: - https://6d2c-2405-201-8020-f826-6042-3169-dd53-a197.ngrok-free.app/api/rooms/<int:room_id>/sell/
+Body: {
+  "symbol": "INFY",
+  "quantity": 5,
+  "price_per_stock": "1550.00"
+}, Headers: {
+    Authorization: Token <your_token>
+}
+
+
+leaderboard: - https://6d2c-2405-201-8020-f826-6042-3169-dd53-a197.ngrok-free.app/api/rooms/<int:room_id>/leaderboard/
+Headers: {
+    Authorization: Token <your_token>
+}
+
+
+tradehistory: - https://6d2c-2405-201-8020-f826-6042-3169-dd53-a197.ngrok-free.app/api/rooms/<int:room_id>/tradehistory/
+Headers: {
+    Authorization: Token <your_token>
+}
+
+
+status: - https://6d2c-2405-201-8020-f826-6042-3169-dd53-a197.ngrok-free.app/api/rooms/<int:room_id>/status/
+Headers: {
+    Authorization: Token <your_token>
+}

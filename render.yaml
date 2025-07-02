@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: tradebot-backend
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn your_project_name.wsgi:application
+    plan: free
+    region: frankfurt
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: mydb
+          property: connectionString
+      - key: SECRET_KEY
+        value: django-insecure-8=zmqjaqswohg_wslciz+ajqk0ucxu2+q71i$ajkrbi6^ar59b
+      - key: DEBUG
+        value: 'False'
+
+databases:
+  - name: mydb
+    plan: free
+    region: frankfurt

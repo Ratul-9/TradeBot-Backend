@@ -28,7 +28,8 @@ SECRET_KEY = 'django-insecure-8=zmqjaqswohg_wslciz+ajqk0ucxu2+q71i$ajkrbi6^ar59b
 
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
-ALLOWED_HOSTS = ['localhost', '127.0.0.1', '.ngrok-free.app']
+ALLOWED_HOSTS = ['*']
+STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
 
 
 
