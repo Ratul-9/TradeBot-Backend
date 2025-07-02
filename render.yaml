@@ -3,7 +3,7 @@ services:
     name: tradebot-backend
     runtime: python
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn your_project_name.wsgi:application
+    startCommand: ./start.sh
     plan: free
     region: frankfurt
     envVars:
