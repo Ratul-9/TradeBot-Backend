@@ -10,6 +10,7 @@ from .models import Room, RoomParticipant, UserBalance, Trade
 from .serializers import RoomSerializer, JoinRoomSerializer, LeaveRoomSerializer, LiveRoomStatusSerializer
 from django.contrib.auth import get_user_model
 from rest_framework import permissions, status
+from .utils import check_and_close_room
 from transactions.models import Transaction, Portfolio, PendingOrder
 from decimal import Decimal
 from django.db.models import Sum, F, Case, When, DecimalField
@@ -104,6 +105,10 @@ class RoomDetailView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, room_id):
+
+        check_and_close_room(room)
+        if room.is_closed and request.user!=room.admin:
+            return Response({"error": "Room is closed"}, status=403)
         try:
             room = Room.objects.get(id=room_id)
         except Room.DoesNotExist:
@@ -145,8 +150,12 @@ class RoomTradeBuyView(APIView):
 
             # Check if room is active
             now = timezone.now()
+            check_and_close_room(room)
+            if room.is_closed:
+                return Response({"error": "Room is closed, no more trades allowed"}, status=403)
+
             if not (room.start_time and room.end_time and room.start_time <= now <= room.end_time):
-                return Response({"error": "Room is not active"}, status=status.HTTP_403_FORBIDDEN)
+                return Response({"error": "Room is not active yet"}, status=403)
 
             # Check participant
             participant = RoomParticipant.objects.filter(user=user, room=room, is_active=True).first()
@@ -206,8 +215,12 @@ class RoomTradeSellView(APIView):
 
             # Check active time
             now = timezone.now()
+            check_and_close_room(room)
+            if room.is_closed:
+                return Response({"error": "Room is closed, no more trades allowed"}, status=403)
+            
             if not (room.start_time and room.end_time and room.start_time <= now <= room.end_time):
-                return Response({"error": "Room is not active"}, status=status.HTTP_403_FORBIDDEN)
+                return Response({"error": "Room is not active yet"}, status=403)
 
             # Participant check
             participant = RoomParticipant.objects.filter(user=user, room=room, is_active=True).first()
@@ -264,7 +277,18 @@ class RoomLeaderboardView(APIView):
         except Room.DoesNotExist:
             return Response({"error": "Room not found"}, status=404)
 
-        participants = RoomParticipant.objects.filter(room=room, is_active=True)
+        # Automatically close room if time is up
+        check_and_close_room(room)
+
+        # Check current time
+        now = timezone.now()
+
+        # ❌ If the room has ended and the user is not admin, block access
+        if room.end_time and now > room.end_time and request.user != room.admin:
+            return Response({"error": "Room is closed. Only the admin can view the leaderboard."}, status=403)
+
+        # ✅ If room is live or user is admin, show leaderboard
+        participants = RoomParticipant.objects.filter(room=room)
         leaderboard = []
 
         for participant in participants:
@@ -291,7 +315,12 @@ class RoomLeaderboardView(APIView):
 
         leaderboard.sort(key=lambda x: x["net_worth"], reverse=True)
 
-        return Response({"room": room.name, "leaderboard": leaderboard}, status=200)
+        return Response({
+            "room": room.name,
+            "is_closed": room.is_closed,
+            "leaderboard": leaderboard
+        }, status=200)
+
     
 class RoomTradeHistoryView(APIView):
     permission_classes = [IsAuthenticated]
@@ -371,3 +400,61 @@ class LiveRoomStatusView(APIView):
 
         serializer = LiveRoomStatusSerializer(response_data)
         return Response(serializer.data, status=status.HTTP_200_OK)
+
+class AdminUserRoomDetailsView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, room_id, user_id):
+        room = get_object_or_404(Room, id=room_id)
+        if request.user != room.admin:
+            return Response({"error": "Only the admin can view user details."}, status=403)
+
+        check_and_close_room(room)
+        if room.is_closed:
+            return Response({"error": "Room is closed. This view is only available during live sessions."}, status=403)
+
+        user = get_object_or_404(User, id=user_id)
+
+        # Portfolio: Holdings per symbol
+        trades = Trade.objects.filter(user=user, room=room)
+        holdings = {}
+        for trade in trades:
+            if trade.symbol not in holdings:
+                holdings[trade.symbol] = 0
+            if trade.trade_type == Trade.BUY:
+                holdings[trade.symbol] += trade.quantity
+            else:
+                holdings[trade.symbol] -= trade.quantity
+
+        portfolio = [
+            {"symbol": sym, "quantity": qty} for sym, qty in holdings.items() if qty > 0
+        ]
+
+        # Trade History
+        trade_history = [
+            {
+                "symbol": trade.symbol,
+                "type": trade.trade_type,
+                "quantity": trade.quantity,
+                "price": str(trade.price),
+                "timestamp": trade.timestamp
+            }
+            for trade in trades.order_by('-timestamp')
+        ]
+
+        # Portfolio Value = cash + net value of holdings
+        user_balance = UserBalance.objects.filter(user=user, room=room).first()
+        cash_balance = float(user_balance.cash_balance) if user_balance else 0
+
+        total_buy = sum(trade.quantity * float(trade.price) for trade in trades if trade.trade_type == "BUY")
+        total_sell = sum(trade.quantity * float(trade.price) for trade in trades if trade.trade_type == "SELL")
+        pnl = total_sell - total_buy
+        net_worth = cash_balance + pnl
+
+        return Response({
+            "username": user.username,
+            "portfolio_value": round(net_worth, 2),
+            "cash_balance": cash_balance,
+            "stock_holdings": portfolio,
+            "trade_history": trade_history,
+        }, status=200)
