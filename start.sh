@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Wait for database to be ready (optional safety step)
+# Wait for database to be ready
 echo "Waiting for database to be ready..."
 sleep 5
 
@@ -10,4 +10,4 @@ python manage.py migrate
 
 # Start Gunicorn server
 echo "Starting Gunicorn..."
-exec gunicorn tradebot-backend.wsgi:application
+exec gunicorn tradebot_backend.wsgi:application --bind 0.0.0.0:$PORT
