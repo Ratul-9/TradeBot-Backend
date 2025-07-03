@@ -28,8 +28,8 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 SECRET_KEY = 'django-insecure-8=zmqjaqswohg_wslciz+ajqk0ucxu2+q71i$ajkrbi6^ar59b'
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
-ALLOWED_HOSTS = ['*']
+DEBUG = os.environ.get("DEBUG", "False").lower() == "true"
+ALLOWED_HOSTS = os.environ.get("ALLOWED_HOSTS").split(" ")
 STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
 
 
@@ -107,6 +107,9 @@ DATABASES = {
         'PORT': '5432',
     }
 }
+
+database_url = os.environ.get("DATABASE_URL")
+DATABASES["default"] = dj_database_url.parse(database_url)
 
 
 # Password validation
