@@ -26,6 +26,7 @@ colorama==0.4.6
 configobj==5.0.9
 configparser==7.2.0
 cryptography==44.0.2
+dj-database-url==3.0.1
 Django==5.1.7
 django-cors-headers==4.7.0
 django-environ==0.12.0
