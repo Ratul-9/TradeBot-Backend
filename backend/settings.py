@@ -47,7 +47,10 @@ INSTALLED_APPS = [
     'stocks',
     'transactions',
     'rooms',
+    'channels',
 ]
+
+ASGI_APPLICATION = "tradebot-backend.asgi.application"
 
 AUTH_USER_MODEL = 'users.CustomUser'
 

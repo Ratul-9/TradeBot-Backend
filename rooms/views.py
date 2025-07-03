@@ -415,7 +415,6 @@ class AdminUserRoomDetailsView(APIView):
 
         user = get_object_or_404(User, id=user_id)
 
-        # Portfolio: Holdings per symbol
         trades = Trade.objects.filter(user=user, room=room)
         holdings = {}
         for trade in trades:
@@ -430,7 +429,6 @@ class AdminUserRoomDetailsView(APIView):
             {"symbol": sym, "quantity": qty} for sym, qty in holdings.items() if qty > 0
         ]
 
-        # Trade History
         trade_history = [
             {
                 "symbol": trade.symbol,
@@ -442,7 +440,6 @@ class AdminUserRoomDetailsView(APIView):
             for trade in trades.order_by('-timestamp')
         ]
 
-        # Portfolio Value = cash + net value of holdings
         user_balance = UserBalance.objects.filter(user=user, room=room).first()
         cash_balance = float(user_balance.cash_balance) if user_balance else 0
 
