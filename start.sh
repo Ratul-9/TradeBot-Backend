@@ -10,4 +10,4 @@ python manage.py migrate
 
 # Start Gunicorn server
 echo "Starting Gunicorn..."
-exec gunicorn tradebot_backend.wsgi:application --bind 0.0.0.0:$PORT
+exec gunicorn backend.wsgi:application --bind 0.0.0.0:$PORT
