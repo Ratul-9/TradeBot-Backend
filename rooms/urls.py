@@ -9,8 +9,11 @@ from .views import (
     RoomLeaderboardView,
     RoomTradeHistoryView,
     LiveRoomStatusView,
-    AdminUserRoomDetailsView
+    AdminUserRoomDetailsView,
+    UserMeView
+
 )
+
 
 urlpatterns = [
     path('create/', CreateRoomView.as_view(), name='create-room'),
@@ -22,6 +25,7 @@ urlpatterns = [
     path('<int:room_id>/leaderboard/', RoomLeaderboardView.as_view(), name='leaderboard'),
     path('<int:room_id>/tradehistory/', RoomTradeHistoryView.as_view(), name='Trade-Record'),
     path('<int:room_id>/status/', LiveRoomStatusView.as_view(), name='status'),
-    path('rooms/<int:room_id>/user-details/<int:user_id>/', AdminUserRoomDetailsView.as_view(), name='admin-user-room-details'),
+    path('<int:room_id>/user-details/<int:user_id>/', AdminUserRoomDetailsView.as_view(), name='admin-user-room-details'),
+    path('users/me/', UserMeView.as_view(), name='user-me'),
 
 ]

@@ -11,7 +11,7 @@ class RoomSerializer(serializers.ModelSerializer):
         model = Room
         fields = ['id', 'name', 'password', 'admin_username', 'start_time', 'end_time']
         extra_kwargs = {
-            'password': {'write_only': True}  # don't show password when reading
+            'password': {'write_only': True} 
         }
 
 class JoinRoomSerializer(serializers.Serializer):
