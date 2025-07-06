@@ -1,4 +1,4 @@
-# utils.py (or somewhere global)
+
 
 from django.utils import timezone
 

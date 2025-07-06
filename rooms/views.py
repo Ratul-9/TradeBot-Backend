@@ -106,13 +106,17 @@ class RoomDetailView(APIView):
 
     def get(self, request, room_id):
 
-        check_and_close_room(room)
+        
         if room.is_closed and request.user!=room.admin:
             return Response({"error": "Room is closed"}, status=403)
         try:
             room = Room.objects.get(id=room_id)
         except Room.DoesNotExist:
             return Response({'error': 'Room not found'}, status=status.HTTP_404_NOT_FOUND)
+        
+        check_and_close_room(room)
+        if room.is_closed and request.user != room.admin:
+            return Response({"error": "Room is closed"}, status=403)
 
         participants = RoomParticipant.objects.filter(room=room, is_active=True)
         participant_data = []
@@ -455,3 +459,15 @@ class AdminUserRoomDetailsView(APIView):
             "stock_holdings": portfolio,
             "trade_history": trade_history,
         }, status=200)
+    
+class UserMeView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+        return Response({
+            "username": user.username,
+            "email": user.email,
+            "is_staff": user.is_staff,
+            "is_superuser": user.is_superuser
+        })
