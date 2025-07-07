@@ -53,28 +53,28 @@ class JoinRoomView(APIView):
 
         user = request.user
 
-        # Check if user is already an active participant
+        
         participant, created = RoomParticipant.objects.get_or_create(
             user=user,
             room=room,
             defaults={'join_time': timezone.now(), 'is_active': True}
         )
         if not created:
-            # If participant exists but inactive, reactivate and update join_time
+            
             if not participant.is_active:
                 participant.is_active = True
                 participant.join_time = timezone.now()
                 participant.leave_time = None
                 participant.save()
 
-        # Create or reset UserBalance
+        
         user_balance, balance_created = UserBalance.objects.get_or_create(
             user=user,
             room=room,
-            defaults={'cash_balance': 100000.00}  # initial virtual balance
+            defaults={'cash_balance': 100000.00}  
         )
         if not balance_created:
-            user_balance.cash_balance = 100000.00  # reset balance on re-join if needed
+            user_balance.cash_balance = 100000.00  
             user_balance.save()
 
         return Response({'message': f'Joined room "{room.name}" successfully.'}, status=status.HTTP_200_OK)
@@ -147,12 +147,11 @@ class RoomTradeBuyView(APIView):
             user = request.user
             data = request.data
 
-            # Check room existence
             room = Room.objects.filter(id=room_id).first()
             if not room:
                 return Response({"error": "Room not found"}, status=status.HTTP_404_NOT_FOUND)
 
-            # Check if room is active
+            
             now = timezone.now()
             check_and_close_room(room)
             if room.is_closed:
@@ -161,12 +160,12 @@ class RoomTradeBuyView(APIView):
             if not (room.start_time and room.end_time and room.start_time <= now <= room.end_time):
                 return Response({"error": "Room is not active yet"}, status=403)
 
-            # Check participant
+            
             participant = RoomParticipant.objects.filter(user=user, room=room, is_active=True).first()
             if not participant:
                 return Response({"error": "You are not an active participant in this room"}, status=status.HTTP_403_FORBIDDEN)
 
-            # Validate data
+            
             symbol = data.get("symbol")
             quantity = int(data.get("quantity", 0))
             price_per_stock = Decimal(data.get("price_per_stock", 0))
@@ -176,7 +175,7 @@ class RoomTradeBuyView(APIView):
 
             total_price = quantity * price_per_stock
 
-            # Check user balance for room
+            
             user_balance = UserBalance.objects.filter(user=user, room=room).first()
             if not user_balance:
                 return Response({"error": "User balance not found for this room"}, status=status.HTTP_404_NOT_FOUND)
@@ -184,11 +183,11 @@ class RoomTradeBuyView(APIView):
             if user_balance.cash_balance < total_price:
                 return Response({"error": "Insufficient balance in this room"}, status=status.HTTP_400_BAD_REQUEST)
 
-            # Deduct balance
+            
             user_balance.cash_balance -= total_price
             user_balance.save()
 
-            # Create trade
+            
             trade = Trade.objects.create(
                 user=user,
                 room=room,
@@ -212,12 +211,12 @@ class RoomTradeSellView(APIView):
             user = request.user
             data = request.data
 
-            # Check room
+            
             room = Room.objects.filter(id=room_id).first()
             if not room:
                 return Response({"error": "Room not found"}, status=status.HTTP_404_NOT_FOUND)
 
-            # Check active time
+            
             now = timezone.now()
             check_and_close_room(room)
             if room.is_closed:
@@ -226,7 +225,7 @@ class RoomTradeSellView(APIView):
             if not (room.start_time and room.end_time and room.start_time <= now <= room.end_time):
                 return Response({"error": "Room is not active yet"}, status=403)
 
-            # Participant check
+            
             participant = RoomParticipant.objects.filter(user=user, room=room, is_active=True).first()
             if not participant:
                 return Response({"error": "You are not an active participant in this room"}, status=status.HTTP_403_FORBIDDEN)
@@ -238,7 +237,7 @@ class RoomTradeSellView(APIView):
             if not symbol or quantity <= 0 or price_per_stock <= 0:
                 return Response({"error": "Invalid input"}, status=status.HTTP_400_BAD_REQUEST)
 
-            # Check user's previous BUY trades for the symbol in this room
+            
             total_bought = Trade.objects.filter(user=user, room=room, symbol=symbol, trade_type="BUY").aggregate(total=models.Sum("quantity"))["total"] or 0
             total_sold = Trade.objects.filter(user=user, room=room, symbol=symbol, trade_type="SELL").aggregate(total=models.Sum("quantity"))["total"] or 0
 
@@ -247,7 +246,7 @@ class RoomTradeSellView(APIView):
             if available_quantity < quantity:
                 return Response({"error": "Not enough holdings to sell"}, status=status.HTTP_400_BAD_REQUEST)
 
-            # Add balance
+            
             total_price = quantity * price_per_stock
             user_balance = UserBalance.objects.filter(user=user, room=room).first()
 
@@ -257,7 +256,7 @@ class RoomTradeSellView(APIView):
             user_balance.cash_balance += total_price
             user_balance.save()
 
-            # Record trade
+            
             trade = Trade.objects.create(
                 user=user,
                 room=room,
@@ -281,17 +280,17 @@ class RoomLeaderboardView(APIView):
         except Room.DoesNotExist:
             return Response({"error": "Room not found"}, status=404)
 
-        # Automatically close room if time is up
+        
         check_and_close_room(room)
 
-        # Check current time
+        
         now = timezone.now()
 
-        # ❌ If the room has ended and the user is not admin, block access
+        
         if room.end_time and now > room.end_time and request.user != room.admin:
             return Response({"error": "Room is closed. Only the admin can view the leaderboard."}, status=403)
 
-        # ✅ If room is live or user is admin, show leaderboard
+        
         participants = RoomParticipant.objects.filter(room=room)
         leaderboard = []
 
