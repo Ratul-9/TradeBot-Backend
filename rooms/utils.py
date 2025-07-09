@@ -1,15 +1,14 @@
-from django.utils import timezone
 from .models import RoomParticipant
+from django.utils import timezone
 
 def check_and_close_room(room):
     now = timezone.now()
+
     if not room.is_closed and room.end_time and now > room.end_time:
         room.is_closed = True
         room.save()
 
-        
-        participants = RoomParticipant.objects.filter(room=room, is_active=True).exclude(user=room.admin)
-        for participant in participants:
-            participant.is_active = False
-            participant.leave_time = now
-            participant.save()
+        RoomParticipant.objects.filter(room=room).exclude(user=room.admin).update(
+            is_active=False,
+            leave_time=timezone.now()
+        )

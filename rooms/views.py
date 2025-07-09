@@ -103,21 +103,27 @@ class LeaveRoomView(APIView):
 class RoomCloseView(APIView):
     permission_classes = [IsAuthenticated]
 
-    def post(self, request):
-        serializer = CloseRoomSerializer(data=request.data)
-        if not serializer.is_valid():
-            return Response(serializer.errors, status=status.HTTP_505_HTTP_VERSION_NOT_SUPPORTED)
-        
-        room_id = serializer.validated_data['room_id']
+    def post(self, request, room_id):
         try:
-            room = Room.objects.get(room_id = room_id, is_closed = False)
-        except:
-            return Response({'Erro: You cannot close room'})
-        
+            room = Room.objects.get(id=room_id, is_closed=False)
+        except Room.DoesNotExist:
+            return Response({"error": "Room does not exist or already closed."}, status=404)
+
+        if request.user != room.admin:
+            return Response({"error": "Only admin can close the room."}, status=403)
+
+        # Set room as closed
         room.is_closed = True
         room.save()
 
-        return Response({"Room has been closed"})
+        # Mark all non-admin users as inactive
+        RoomParticipant.objects.filter(room=room).exclude(user=room.admin).update(
+            is_active=False,
+            leave_time=timezone.now()
+        )
+
+        return Response({"message": "Room closed and all participants removed (except admin)."}, status=200)
+
 
 class RoomDetailView(APIView):
     permission_classes = [IsAuthenticated]
