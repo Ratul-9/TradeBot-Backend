@@ -7,7 +7,7 @@ from django.db.models import Sum
 from rest_framework import status
 from django.shortcuts import get_object_or_404
 from .models import Room, RoomParticipant, UserBalance, Trade
-from .serializers import RoomSerializer, JoinRoomSerializer, LeaveRoomSerializer, LiveRoomStatusSerializer
+from .serializers import RoomSerializer, JoinRoomSerializer, LeaveRoomSerializer, LiveRoomStatusSerializer, CloseRoomSerializer
 from django.contrib.auth import get_user_model
 from rest_framework import permissions, status
 from .utils import check_and_close_room
@@ -35,12 +35,11 @@ class CreateRoomView(APIView):
         
 class JoinRoomView(APIView):
      permission_classes = [IsAuthenticated]
-     def post(self, request):
+     def post(self, request,room_id):
         serializer = JoinRoomSerializer(data=request.data)
         if not serializer.is_valid():
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-        room_id = serializer.validated_data['room_id']
         password = serializer.validated_data.get('password', '')
 
         try:
@@ -100,7 +99,26 @@ class LeaveRoomView(APIView):
         participant.save()
 
         return Response({'message': f'You have successfully left the room.'}, status=status.HTTP_200_OK)
-    
+
+class RoomCloseView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        serializer = CloseRoomSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_505_HTTP_VERSION_NOT_SUPPORTED)
+        
+        room_id = serializer.validated_data['room_id']
+        try:
+            room = Room.objects.get(room_id = room_id, is_closed = False)
+        except:
+            return Response({'Erro: You cannot close room'})
+        
+        room.is_closed = True
+        room.save()
+
+        return Response({"Room has been closed"})
+
 class RoomDetailView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -470,3 +488,4 @@ class UserMeView(APIView):
             "is_staff": user.is_staff,
             "is_superuser": user.is_superuser
         })
+    

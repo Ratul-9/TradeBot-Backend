@@ -16,6 +16,7 @@ Including another URLconf
 """
 from django.contrib import admin
 from django.urls import path, include
+from users.views import VerifyEmailView
 
 
 urlpatterns = [
@@ -23,5 +24,6 @@ urlpatterns = [
     path('api/users/', include('users.urls')),
     path('api/stocks/', include('stocks.urls')),
     path("api/transactions/", include("transactions.urls")),
-    path("api/rooms/", include('rooms.urls'))
+    path("api/rooms/", include('rooms.urls')),
+    path('verify-email/<uidb64>/<token>/', VerifyEmailView.as_view(), name='verify-email')
 ]

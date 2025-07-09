@@ -15,12 +15,13 @@ class RoomSerializer(serializers.ModelSerializer):
         }
 
 class JoinRoomSerializer(serializers.Serializer):
-    room_id = serializers.IntegerField()
     password = serializers.CharField(required=False, allow_blank=True)
 
 class LeaveRoomSerializer(serializers.Serializer):
     room_id = serializers.IntegerField()
 
+class CloseRoomSerializer(serializers.Serializer):
+    room_id = serializers.CharField(required=True, allow_blank=False)
 
 class ParticipantTradeSummarySerializer(serializers.Serializer):
     username = serializers.CharField()

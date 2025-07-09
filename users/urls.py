@@ -10,5 +10,4 @@ urlpatterns = [
     path('profile/', GetUserProfile.as_view(), name='profile'),
     path('user/balance/', GetUserBalance.as_view(), name='user_balance'),
     path('admin-login/', StaffLoginView.as_view(), name='admin-login'),
-    path('verify-email/<uidb64>/<token>/', VerifyEmailView.as_view(), name='verify-email'),
 ]
