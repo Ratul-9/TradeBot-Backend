@@ -17,6 +17,8 @@ Including another URLconf
 from django.contrib import admin
 from django.urls import path, include
 from users.views import VerifyEmailView
+from django.conf import settings 
+from  django.conf.urls.static import static 
 
 
 urlpatterns = [
@@ -27,3 +29,8 @@ urlpatterns = [
     path("api/rooms/", include('rooms.urls')),
     path('verify-email/<uidb64>/<token>/', VerifyEmailView.as_view(), name='verify-email')
 ]
+
+
+if settings.DEBUG:
+    urlpatterns += static(settings.MEDIA_URL, document_root = settings.MEDIA_ROOT)
+    urlpatterns += static(settings.STATIC_URL, document_root = settings.STATIC_URL)
