@@ -14,6 +14,7 @@ from .utils import check_and_close_room
 from transactions.models import Transaction, Portfolio, PendingOrder
 from decimal import Decimal
 from django.db.models import Sum, F, Case, When, DecimalField
+from django.db.models import ExpressionWrapper
 User = get_user_model()
 
 class CreateRoomView(APIView):
@@ -112,11 +113,11 @@ class RoomCloseView(APIView):
         if request.user != room.admin:
             return Response({"error": "Only admin can close the room."}, status=403)
 
-        # Set room as closed
+       
         room.is_closed = True
         room.save()
 
-        # Mark all non-admin users as inactive
+        
         RoomParticipant.objects.filter(room=room).exclude(user=room.admin).update(
             is_active=False,
             leave_time=timezone.now()
@@ -402,15 +403,15 @@ class LiveRoomStatusView(APIView):
             # Calculate total bought and total sold by summing Transactions
             trades = Transaction.objects.filter(user=user, room=room)
 
-            total_bought = trades.filter(transaction_type="BUY").aggregate(
-                total=Sum(F('quantity') * F('price_per_stock'), output_field=DecimalField())
-            )['total'] or 0
+            total_bought = trades.filter(transaction_type="BUY").annotate(
+                total_value=ExpressionWrapper(F('quantity') * F('price'), output_field=DecimalField())
+            ).aggregate(total=Sum('total_value'))['total'] or 0
 
-            total_sold = trades.filter(transaction_type="SELL").aggregate(
-                total=Sum(F('quantity') * F('price_per_stock'), output_field=DecimalField())
-            )['total'] or 0
+            total_sold = trades.filter(transaction_type="SELL").annotate(
+                total_value=ExpressionWrapper(F('quantity') * F('price'), output_field=DecimalField())
+            ).aggregate(total=Sum('total_value'))['total'] or 0
 
-            profit_loss = total_sold - total_bought
+            profit_loss = (total_sold or 0) - (total_bought or 0)
 
             participants_data.append({
                 "username": user.username,

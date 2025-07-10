@@ -86,3 +86,7 @@ local_settings.py
 
 # Alpha Vantage API key and other secrets
 secrets.json
+
+#Environent Config
+.env
+*.env
