@@ -91,11 +91,7 @@ class LeaveRoomView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request, room_id):
-        serializer = LeaveRoomSerializer(data=request.data)
-        if not serializer.is_valid():
-            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
-        room_id = serializer.validated_data['room_id']
+        
         user = request.user
 
         try:
