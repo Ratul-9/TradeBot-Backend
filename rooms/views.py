@@ -134,6 +134,8 @@ class RoomCloseView(APIView):
         return Response({"message": "Room closed and all participants removed (except admin)."}, status=200)
 
 
+from django.utils import timezone
+
 class RoomDetailView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -143,11 +145,28 @@ class RoomDetailView(APIView):
         except Room.DoesNotExist:
             return Response({'error': 'Room not found'}, status=status.HTTP_404_NOT_FOUND)
         
+        # Debug: Check room status and times
+        now = timezone.now()
+        print(f"=== Room Detail Debug ===")
+        print(f"Room ID: {room_id}")
+        print(f"Room name: {room.name}")
+        print(f"Current time: {now}")
+        print(f"Room start_time: {room.start_time}")
+        print(f"Room end_time: {room.end_time}")
+        print(f"is_closed BEFORE check: {room.is_closed}")
+        print(f"Time until end: {room.end_time - now if room.end_time else 'No end time'}")
+        print(f"Is time past end? {now > room.end_time if room.end_time else 'No end time'}")
+        
         # Check and close room if needed
         check_and_close_room(room)
         
+        # Refresh from database to get updated status
+        room.refresh_from_db()
+        print(f"is_closed AFTER check: {room.is_closed}")
+        
         # Check if room is closed and user is not admin
         if room.is_closed and request.user != room.admin:
+            print(f"Room is closed and user {request.user.username} is not admin {room.admin.username}")
             return Response({"error": "Room is closed"}, status=403)
 
         participants = RoomParticipant.objects.filter(room=room, is_active=True)
@@ -162,16 +181,17 @@ class RoomDetailView(APIView):
             })
 
         room_info = {
-            'id': room.id,  # Add this - frontend expects it
-            'name': room.name,  # Change from room_name to name for consistency
-            'room_name': room.name,  # Keep this for backward compatibility
+            'id': room.id,
+            'name': room.name,
+            'room_name': room.name,
             'admin': room.admin.username,
             'start_time': room.start_time,
             'end_time': room.end_time,
-            'is_closed': room.is_closed,  # Add this for frontend to check
+            'is_closed': room.is_closed,
             'active_participants': participant_data
         }
 
+        print(f"Returning room info successfully")
         return Response(room_info, status=status.HTTP_200_OK)
     
 class RoomTradeBuyView(APIView):
