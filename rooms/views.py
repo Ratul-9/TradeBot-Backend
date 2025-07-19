@@ -67,8 +67,6 @@ class JoinRoomView(APIView):
                 participant.join_time = timezone.now()
                 participant.leave_time = None
                 participant.save()
-
-        # Create or reset user balance
         user_balance, balance_created = UserBalance.objects.get_or_create(
             user=user,
             room=room,
@@ -140,16 +138,15 @@ class RoomDetailView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, room_id):
-
-        
-        if room.is_closed and request.user!=room.admin:
-            return Response({"error": "Room is closed"}, status=403)
         try:
             room = Room.objects.get(id=room_id)
         except Room.DoesNotExist:
             return Response({'error': 'Room not found'}, status=status.HTTP_404_NOT_FOUND)
         
+        # Check and close room if needed
         check_and_close_room(room)
+        
+        # Check if room is closed and user is not admin
         if room.is_closed and request.user != room.admin:
             return Response({"error": "Room is closed"}, status=403)
 
@@ -165,10 +162,13 @@ class RoomDetailView(APIView):
             })
 
         room_info = {
-            'room_name': room.name,
+            'id': room.id,  # Add this - frontend expects it
+            'name': room.name,  # Change from room_name to name for consistency
+            'room_name': room.name,  # Keep this for backward compatibility
             'admin': room.admin.username,
             'start_time': room.start_time,
             'end_time': room.end_time,
+            'is_closed': room.is_closed,  # Add this for frontend to check
             'active_participants': participant_data
         }
 
