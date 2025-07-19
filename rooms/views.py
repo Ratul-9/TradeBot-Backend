@@ -91,7 +91,7 @@ class LeaveRoomView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request, room_id):
-        
+
         user = request.user
 
         try:
@@ -131,6 +131,20 @@ class RoomCloseView(APIView):
 
 
 from django.utils import timezone
+
+class LiveRoomView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, room_id):
+        try:
+            room = Room.objects.get(id=room_id)
+        except Room.DoesNotExist:
+            return Response({"error": "Room Not  Found"}, status=status.HTTP_404_NOT_FOUND)
+        
+        room.refresh_from_db()
+        availability = room.is_closed
+
+        return Response({"is_closed" : availability} , status=status.HTTP_200_OK)
 
 class ParticipantView(APIView):
     permission_classes = [IsAuthenticated]
@@ -433,55 +447,9 @@ class RoomTradeHistoryView(APIView):
             "trade_history": trade_history
         }, status=200)
     
-class LiveRoomStatusView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
 
-    def get(self, request, room_id):
-        room = get_object_or_404(Room, id=room_id)
 
-        # Check if request.user is the admin of this room
-        if request.user != room.admin:
-            return Response({"error": "You are not authorized to view this room's status."}, status=status.HTTP_403_FORBIDDEN)
 
-        # Get active participants
-        active_participants = RoomParticipant.objects.filter(room=room, is_active=True)
-
-        participants_data = []
-
-        for participant in active_participants:
-            user = participant.user
-            # Get user balance for this room
-            user_balance_obj = UserBalance.objects.filter(user=user, room=room).first()
-            cash_balance = user_balance_obj.cash_balance if user_balance_obj else 0
-
-            # Calculate total bought and total sold by summing Transactions
-            trades = Transaction.objects.filter(user=user, room=room)
-
-            total_bought = trades.filter(transaction_type="BUY").annotate(
-                total_value=ExpressionWrapper(F('quantity') * F('price'), output_field=DecimalField())
-            ).aggregate(total=Sum('total_value'))['total'] or 0
-
-            total_sold = trades.filter(transaction_type="SELL").annotate(
-                total_value=ExpressionWrapper(F('quantity') * F('price'), output_field=DecimalField())
-            ).aggregate(total=Sum('total_value'))['total'] or 0
-
-            profit_loss = (total_sold or 0) - (total_bought or 0)
-
-            participants_data.append({
-                "username": user.username,
-                "cash_balance": cash_balance,
-                "total_bought": total_bought,
-                "total_sold": total_sold,
-                "profit_loss": profit_loss,
-            })
-
-        response_data = {
-            "room_name": room.name,
-            "participants": participants_data
-        }
-
-        serializer = LiveRoomStatusSerializer(response_data)
-        return Response(serializer.data, status=status.HTTP_200_OK)
 
 class AdminUserRoomDetailsView(APIView):
     permission_classes = [IsAuthenticated]

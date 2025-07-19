@@ -8,12 +8,12 @@ from .views import (
     RoomTradeSellView,
     RoomLeaderboardView,
     RoomTradeHistoryView,
-    LiveRoomStatusView,
     AdminUserRoomDetailsView,
     UserMeView,
     RoomCloseView,
     RoomByNameView,
-    ParticipantView
+    ParticipantView,
+    LiveRoomView
 )
 
 
@@ -26,7 +26,7 @@ urlpatterns = [
     path('<int:room_id>/sell/', RoomTradeSellView.as_view(), name='Sell'),
     path('<int:room_id>/leaderboard/', RoomLeaderboardView.as_view(), name='leaderboard'),
     path('<int:room_id>/tradehistory/', RoomTradeHistoryView.as_view(), name='Trade-Record'),
-    path('<int:room_id>/status/', LiveRoomStatusView.as_view(), name='status'),
+    path('<int:room_id>/status/', LiveRoomView.as_view(), name='status'),
     path('<int:room_id>/user-details/<int:user_id>/', AdminUserRoomDetailsView.as_view(), name='admin-user-room-details'),
     path('users/me/', UserMeView.as_view(), name='user-me'),
     path('<int:room_id>/close/', RoomCloseView.as_view(), name='close-room'),
