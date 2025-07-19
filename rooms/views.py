@@ -35,8 +35,9 @@ class CreateRoomView(APIView):
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
         
 class JoinRoomView(APIView):
-     permission_classes = [IsAuthenticated]
-     def post(self, request,room_id):
+    permission_classes = [IsAuthenticated]
+    
+    def post(self, request, room_id):
         serializer = JoinRoomSerializer(data=request.data)
         if not serializer.is_valid():
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
@@ -53,21 +54,21 @@ class JoinRoomView(APIView):
 
         user = request.user
 
-        
+        # Create or update participant
         participant, created = RoomParticipant.objects.get_or_create(
             user=user,
             room=room,
             defaults={'join_time': timezone.now(), 'is_active': True}
         )
         if not created:
-            
+            # If participant exists but is inactive, reactivate them
             if not participant.is_active:
                 participant.is_active = True
                 participant.join_time = timezone.now()
                 participant.leave_time = None
                 participant.save()
 
-        
+        # Create or reset user balance
         user_balance, balance_created = UserBalance.objects.get_or_create(
             user=user,
             room=room,
@@ -77,7 +78,14 @@ class JoinRoomView(APIView):
             user_balance.cash_balance = 100000.00  
             user_balance.save()
 
-        return Response({'message': f'Joined room "{room.name}" successfully.'}, status=status.HTTP_200_OK)
+        return Response({
+            'message': f'Joined room "{room.name}" successfully.',
+            'room': {
+                'id': room.id,
+                'name': room.name,
+                'admin': room.admin.username,
+            }
+        }, status=status.HTTP_200_OK)
      
 class LeaveRoomView(APIView):
     permission_classes = [IsAuthenticated]
@@ -496,3 +504,27 @@ class UserMeView(APIView):
             "is_superuser": user.is_superuser
         })
     
+class RoomByNameView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, room_name):
+        try:
+            # Look for room by name (case-insensitive)
+            room = Room.objects.filter(name__iexact=room_name).first()
+            
+            # If not found by name, try by code (if you have a code field)
+            if not room:
+                room = Room.objects.filter(code__iexact=room_name).first()
+            
+            if not room:
+                return Response({'error': 'Room not found'}, status=status.HTTP_404_NOT_FOUND)
+
+            return Response({
+                'id': room.id,
+                'name': room.name,
+                'code': getattr(room, 'code', None),  # If you have a code field
+                'has_password': bool(room.password),  # Don't return the actual password
+            }, status=status.HTTP_200_OK)
+
+        except Exception as e:
+            return Response({'error': 'Failed to lookup room'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
