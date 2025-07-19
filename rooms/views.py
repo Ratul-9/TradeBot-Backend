@@ -154,10 +154,25 @@ class ParticipantView(APIView):
 
         for participant in participants:
             balance = UserBalance.objects.filter(user=participant.user, room=room).first()
+            trades = Transaction.objects.filter(user=participant.user, room=room)
+            total_bought = trades.filter(transaction_type="BUY").annotate(
+                total_value=ExpressionWrapper(F('quantity') * F('price'), output_field=DecimalField())
+            ).aggregate(total=Sum('total_value'))['total'] or 0
+
+            total_sold = trades.filter(transaction_type="SELL").annotate(
+                total_value=ExpressionWrapper(F('quantity') * F('price'), output_field=DecimalField())
+            ).aggregate(total=Sum('total_value'))['total'] or 0
+
+            profit_loss = (total_sold or 0) - (total_bought or 0)
             participant_data.append({
+
                 'username': participant.user.username,
                 'cash_balance': str(balance.cash_balance) if balance else "0.00",
+                "total_bought": total_bought,
+                "total_sold": total_sold,
+                "profit_loss": profit_loss,
                 'join_time': participant.join_time,
+
             })
         
         return Response(participant_data, status=status.HTTP_200_OK)
