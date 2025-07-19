@@ -84,6 +84,8 @@ class JoinRoomView(APIView):
                 'id': room.id,
                 'name': room.name,
                 'admin': room.admin.username,
+                'start_time': room.start_time.isoformat() if room.start_time else None,
+                'end_time': room.end_time.isoformat() if room.end_time else None,
             }
         }, status=status.HTTP_200_OK)
      
