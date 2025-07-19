@@ -19,10 +19,24 @@ from django.urls import path, include
 from users.views import VerifyEmailView
 from django.conf import settings 
 from  django.conf.urls.static import static 
+from rest_framework_simplejwt.views import (
+    TokenObtainPairView,
+    TokenRefreshView,
+    TokenVerifyView,
+    TokenBlacklistView,
+)
 
 
 urlpatterns = [
     path('admin/', admin.site.urls),
+
+
+    path('api/auth/login/', TokenObtainPairView.as_view(), name='token_obtain_pair'),
+    path('api/auth/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
+    path('api/auth/verify/', TokenVerifyView.as_view(), name='token_verify'),
+    path('api/auth/logout/', TokenBlacklistView.as_view(), name='token_blacklist'),
+
+
     path('api/users/', include('users.urls')),
     path('api/stocks/', include('stocks.urls')),
     path("api/transactions/", include("transactions.urls")),
