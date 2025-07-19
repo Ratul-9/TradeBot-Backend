@@ -136,6 +136,32 @@ class RoomCloseView(APIView):
 
 from django.utils import timezone
 
+class ParticipantView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, room_id):
+        try:
+            room = Room.objects.get(id=room_id)
+        except Room.DoesNotExist:
+            return Response({'error' : 'Room Not Found'}, status=status.HTTP_404_NOT_FOUND)
+        
+        check_and_close_room(room)
+
+        room.refresh_from_db()
+
+        participants = RoomParticipant.objects.filter(room=room, is_active=True).order_by('join_time')
+        participant_data = []
+
+        for participant in participants:
+            balance = UserBalance.objects.filter(user=participant.user, room=room).first()
+            participant_data.append({
+                'username': participant.user.username,
+                'cash_balance': str(balance.cash_balance) if balance else "0.00",
+                'join_time': participant.join_time,
+            })
+        
+        return Response(participant_data, status=status.HTTP_200_OK)
+
 class RoomDetailView(APIView):
     permission_classes = [IsAuthenticated]
 
