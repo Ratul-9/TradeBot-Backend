@@ -1,4 +1,5 @@
 from rest_framework.views import APIView
+import upstox_client
 from django.utils import timezone
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
@@ -15,6 +16,8 @@ from transactions.models import Transaction, Portfolio, PendingOrder
 from decimal import Decimal
 from django.db.models import Sum, F, Case, When, DecimalField
 from django.db.models import ExpressionWrapper
+from .models import Stock, SMEStock
+from django.db.models import Q
 
 
 User = get_user_model()
@@ -544,3 +547,70 @@ class RoomByNameView(APIView):
 
         except Exception as e:
             return Response({'error': 'Failed to lookup room'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        
+class StockSearchView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        try:
+            search_query = request.GET.get('q', '').strip().upper()
+            limit = min(int(request.GET.get('limit', 20)), 100)
+
+            if not search_query:
+                return Response({
+                    'error': 'Please Provide search query using q parameter'
+                }, status=status.HTTP_400_BAD_REQUEST)
+            
+            if len(search_query)<1:
+                return Response({
+                    'error': 'Search query must be at least 1 character long'
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+            results = []
+
+            normal_stocks = Stock.objects.filter(
+                Q(symbol__icontains=search_query) |
+                Q(name_of_company__icontains=search_query)
+            ).values('symbol', 'name_of_company', 'series')[:limit//2]
+
+            for stock in normal_stocks:
+                results.append({
+                    'symbol': stock['Symbol'],
+                    'name': stock['Name of Company'],
+                    'series': stock['Series'],
+                    'type': 'NSE'
+                })
+
+            remaining_limit = limit - len(results)
+            if remaining_limit > 0:
+                sme_stocks = SMEStock.objects.filter(
+                    Q(symbol__icontains=search_query) |
+                    Q(name_of_company__icontains=search_query)
+                ).values('symbol', 'name_of_company', 'series')[:remaining_limit]
+
+                for stock in sme_stocks:
+                    results.append({
+                        'symbol': stock['Symbol'],
+                        'name': stock['Name of Company'],
+                        'series': stock['Series'],
+                        'type': 'SME'
+                    })
+
+            # Sort results by symbol for consistent ordering
+            results.sort(key=lambda x: x['Symbol'])
+
+            return Response({
+                'query': search_query,
+                'count': len(results),
+                'results': results
+            }, status=status.HTTP_200_OK)
+        
+        except ValueError:
+            return Response({
+                'error': 'Invalid limit parameter. Must be a number.'
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        except Exception as e:
+            return Response({
+                'error': f'An error occurred while searching: {str(e)}'
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
