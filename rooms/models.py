@@ -292,7 +292,7 @@ class Trade(models.Model):
 
     user = models.ForeignKey(User, on_delete=models.CASCADE)
     room = models.ForeignKey(Room, on_delete=models.CASCADE)
-    order = models.ForeignKey(OrderBook, on_delete=models.CASCADE, related_name='executions')
+    order = models.ForeignKey(OrderBook, on_delete=models.CASCADE, related_name='executions', null=True, blank=True)
     trade_type = models.CharField(max_length=4, choices=TRADE_TYPE_CHOICES)
     symbol = models.CharField(max_length=20)
     quantity = models.PositiveIntegerField()
