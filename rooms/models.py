@@ -37,7 +37,50 @@ class UserBalance(models.Model):
 
     def __str__(self):
         return f"{self.user.username} balance in {self.room.name}: {self.cash_balance}"
-    
+
+class Stock(models.Model):
+    """Model for normal equity stocks"""
+    symbol = models.CharField(max_length=20, db_index=True, unique=True)
+    name_of_company = models.CharField(max_length=200)
+    series = models.CharField(max_length=10)
+    date_of_listing = models.DateField()
+    paid_up_value = models.DecimalField(max_digits=15, decimal_places=2)
+    isin_number = models.CharField(max_length=12, unique=True)
+    face_value = models.DecimalField(max_digits=10, decimal_places=2)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=['symbol']),
+            models.Index(fields=['isin_number']),
+            models.Index(fields=['name_of_company']),
+        ]
+
+    def __str__(self):
+        return f"{self.symbol} - {self.name_of_company}"
+
+class SMEStock(models.Model):
+    """Model for SME (Small and Medium Enterprise) based equity stocks"""
+    symbol = models.CharField(max_length=20, db_index=True, unique=True)
+    name_of_company = models.CharField(max_length=200)
+    series = models.CharField(max_length=10)
+    date_of_listing = models.DateField()
+    paid_up_value = models.DecimalField(max_digits=15, decimal_places=2)
+    isin_number = models.CharField(max_length=12, unique=True)
+    face_value = models.DecimalField(max_digits=10, decimal_places=2)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=['symbol']),
+            models.Index(fields=['isin_number']),
+            models.Index(fields=['name_of_company']),
+        ]
+
+    def __str__(self):
+        return f"{self.symbol} - {self.name_of_company} (SME)"
 
 class Trade(models.Model):
     BUY = 'BUY'
@@ -54,49 +97,3 @@ class Trade(models.Model):
 
     def __str__(self):
         return f"{self.trade_type} {self.quantity} {self.symbol} @ {self.price} by {self.user.username}"
-    
-
-class Stock(models.Model):
-    room = models.ForeignKey(Room, on_delete=models.CASCADE, related_name='stocks')
-    symbol = models.CharField(max_length=20, db_index=True)
-    name_of_company = models.CharField(max_length=200)
-    series = models.CharField(max_length=10)
-    date_of_listing = models.DateField()
-    paid_up_value = models.DecimalField(max_digits=15, decimal_places=2)
-    isin_number = models.CharField(max_length=12, unique=True)
-    face_value = models.DecimalField(max_digits=10, decimal_places=2)
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
-
-    class Meta:
-        unique_together = ['room', 'symbol']
-        indexes = [
-            models.Index(fields=['symbol', 'room']),
-            models.Index(fields=['isin_number']),
-        ]
-
-    def __str__(self):
-        return f"{self.symbol} - {self.name_of_company} ({self.room.name})"
-    
-
-class SMEStock(models.Model):
-    room = models.ForeignKey(Room, on_delete=models.CASCADE, related_name='sme_stocks')
-    symbol = models.CharField(max_length=20, db_index=True)
-    name_of_company = models.CharField(max_length=200)
-    series = models.CharField(max_length=10)
-    date_of_listing = models.DateField()
-    paid_up_value = models.DecimalField(max_digits=15, decimal_places=2)
-    isin_number = models.CharField(max_length=12, unique=True)
-    face_value = models.DecimalField(max_digits=10, decimal_places=2)
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
-
-    class Meta:
-        unique_together = ['room', 'symbol']
-        indexes = [
-            models.Index(fields=['symbol', 'room']),
-            models.Index(fields=['isin_number']),
-        ]
-
-    def __str__(self):
-        return f"{self.symbol} - {self.name_of_company} (SME - {self.room.name})"

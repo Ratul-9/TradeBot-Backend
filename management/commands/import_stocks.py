@@ -1,3 +1,6 @@
+# management/commands/import_stocks.py
+# Create this file in: your_app/management/commands/import_stocks.py
+
 import csv
 import os
 from datetime import datetime
@@ -6,16 +9,11 @@ from django.db import transaction
 from decimal import Decimal
 from rooms.models import Room, Stock, SMEStock
 
+
 class Command(BaseCommand):
-    help = 'Import stock data from CSV Files'
+    help = 'Import stock data from CSV files'
 
     def add_arguments(self, parser):
-        parser.add_argument(
-            '--room_id',
-            type=int,
-            required=True,
-            help='Room ID to associate stocks with'
-        )
         parser.add_argument(
             '--equity_csv',
             type=str,
@@ -31,29 +29,20 @@ class Command(BaseCommand):
         parser.add_argument(
             '--clear_existing',
             action='store_true',
-            help='Clear existing stock data for the room before importing'
+            help='Clear existing stock data before importing'
         )
-    
 
     def handle(self, *args, **options):
-        try:
-            room = Room.objects.get(id=options['room_id'])
-        except Room.DoesNotExist:
-            self.stdout.write(
-                self.style.ERROR(f'Room with ID {options["room_id"]} does not exist')
-            )
-            return
-
         if options['clear_existing']:
-            Stock.objects.filter(room=room).delete()
-            SMEStock.objects.filter(room=room).delete()
+            Stock.objects.all().delete()
+            SMEStock.objects.all().delete()
             self.stdout.write(
-                self.style.WARNING(f'Cleared existing stock data for room: {room.name}')
+                self.style.WARNING('Cleared existing stock data')
             )
 
         # Import normal equity stocks
         if os.path.exists(options['equity_csv']):
-            self.import_stocks(options['equity_csv'], room, Stock, 'Normal Equity')
+            self.import_stocks(options['equity_csv'], Stock, 'Normal Equity')
         else:
             self.stdout.write(
                 self.style.ERROR(f'Equity CSV file not found: {options["equity_csv"]}')
@@ -61,13 +50,13 @@ class Command(BaseCommand):
 
         # Import SME stocks
         if os.path.exists(options['sme_csv']):
-            self.import_stocks(options['sme_csv'], room, SMEStock, 'SME Equity')
+            self.import_stocks(options['sme_csv'], SMEStock, 'SME Equity')
         else:
             self.stdout.write(
                 self.style.ERROR(f'SME CSV file not found: {options["sme_csv"]}')
             )
 
-    def import_stocks(self, csv_file_path, room, model_class, stock_type):
+    def import_stocks(self, csv_file_path, model_class, stock_type):
         success_count = 0
         error_count = 0
         
@@ -110,7 +99,6 @@ class Command(BaseCommand):
 
                         # Create or update stock
                         stock, created = model_class.objects.update_or_create(
-                            room=room,
                             symbol=symbol,
                             defaults={
                                 'name_of_company': name_of_company,
