@@ -20,12 +20,21 @@ else:
 
 logger = logging.getLogger(__name__)
 
+from datetime import datetime, timedelta
+from typing import Optional, Dict, List
+from decimal import Decimal
+import logging
+
+logger = logging.getLogger(__name__)
+
 class MarketDataService:
     """Service class for handling market data operations"""
     
     def __init__(self):
         self.upstox_api = upstox_client.MarketQuoteApi()
+        self.historical_api = upstox_client.HistoryV3Api()  # Add historical API
         self.cache_timeout = 60  # 1 minute cache
+        self.use_historical_fallback = True  # Flag to enable historical data fallback
     
     def get_instrument_key(self, symbol: str) -> Optional[str]:
         """Get instrument key for a given symbol"""
@@ -57,8 +66,95 @@ class MarketDataService:
             logger.error(f"Error getting instrument key for {symbol}: {e}")
             return None
     
+    def get_historical_market_data(self, symbol: str, days_back: int = 1) -> Optional[Dict]:
+        """
+        Get historical market data and use the most recent data as current market data
+        This is a temporary solution when real-time LTP is not available
+        """
+        try:
+            # Check cache first
+            cache_key = f"historical_market_data_{symbol}_{days_back}"
+            cached_data = cache.get(cache_key)
+            
+            if cached_data:
+                return cached_data
+            
+            instrument_key = self.get_instrument_key(symbol)
+            if not instrument_key:
+                logger.warning(f"No instrument key found for symbol: {symbol}")
+                return None
+            
+            # Calculate date range
+            end_date = datetime.now()
+            start_date = end_date - timedelta(days=days_back)
+            
+            # Format dates for Upstox API (YYYY-MM-DD)
+            start_date_str = start_date.strftime('%Y-%m-%d')
+            end_date_str = end_date.strftime('%Y-%m-%d')
+            
+            logger.info(f"Fetching historical data for {symbol} from {start_date_str} to {end_date_str}")
+            
+            # Fetch historical data from Upstox API
+            response = self.historical_api.get_historical_candle_data1(
+                instrument_key=instrument_key,
+                interval='1minute',  
+                from_date=start_date_str,
+                to_date=end_date_str
+            )
+            
+            if response and hasattr(response, 'data') and response.data.get('candles'):
+                candles = response.data.get('candles', [])
+                
+                if not candles:
+                    logger.warning(f"No historical data found for {symbol}")
+                    return None
+                
+                # Get the most recent candle (first in the list as Upstox returns in descending order)
+                latest_candle = candles[0]
+                
+                # Candle format: [timestamp, open, high, low, close, volume, oi]
+                if len(latest_candle) >= 6:
+                    market_data = {
+                        'symbol': symbol,
+                        'ltp': Decimal(str(latest_candle[4])),  # Close price as LTP
+                        'open_price': Decimal(str(latest_candle[1])),
+                        'high_price': Decimal(str(latest_candle[2])),
+                        'low_price': Decimal(str(latest_candle[3])),
+                        'close_price': Decimal(str(latest_candle[4])),
+                        'volume': latest_candle[5] if len(latest_candle) > 5 else 0,
+                        'change_percent': self.calculate_change_percent(
+                            Decimal(str(latest_candle[4])), 
+                            Decimal(str(latest_candle[1]))
+                        ),
+                        'data_source': 'historical',  # Flag to indicate data source
+                        'timestamp': datetime.fromtimestamp(latest_candle[0] / 1000) if latest_candle[0] else datetime.now()
+                    }
+                    
+                    # Cache the data (shorter cache time for historical data)
+                    cache.set(cache_key, market_data, self.cache_timeout // 2)
+                    
+                    # Update database
+                    self.update_market_data_db(market_data)
+                    
+                    logger.info(f"Successfully fetched historical data for {symbol}, LTP: {market_data['ltp']}")
+                    return market_data
+            
+        except Exception as e:
+            logger.error(f"Error fetching historical data for {symbol}: {e}")
+            
+        return None
+    
+    def calculate_change_percent(self, current_price: Decimal, previous_price: Decimal) -> Decimal:
+        """Calculate percentage change between two prices"""
+        try:
+            if previous_price == 0:
+                return Decimal('0')
+            return ((current_price - previous_price) / previous_price) * 100
+        except Exception:
+            return Decimal('0')
+    
     def get_market_data(self, symbol: str) -> Optional[Dict]:
-        """Get current market data for a symbol"""
+        """Get current market data for a symbol with historical data fallback"""
         try:
             # Check cache first
             cache_key = f"market_data_{symbol}"
@@ -72,42 +168,69 @@ class MarketDataService:
                 logger.warning(f"No instrument key found for symbol: {symbol}")
                 return None
             
-            # Fetch from Upstox API
-            response = self.upstox_api.get_full_market_quote(instrument_key)
+            # Try to fetch real-time data first
+            try:
+                response = self.upstox_api.get_full_market_quote(instrument_key)
+                
+                if response and hasattr(response, 'data') and response.data.get('last_price'):
+                    market_data = {
+                        'symbol': symbol,
+                        'ltp': Decimal(str(response.data.get('last_price', 0))),
+                        'open_price': Decimal(str(response.data.get('ohlc', {}).get('open', 0))),
+                        'high_price': Decimal(str(response.data.get('ohlc', {}).get('high', 0))),
+                        'low_price': Decimal(str(response.data.get('ohlc', {}).get('low', 0))),
+                        'close_price': Decimal(str(response.data.get('ohlc', {}).get('close', 0))),
+                        'volume': response.data.get('volume', 0),
+                        'change_percent': Decimal(str(response.data.get('change_percent', 0))),
+                        'data_source': 'real_time',
+                        'timestamp': datetime.now()
+                    }
+                    
+                    # Cache the data
+                    cache.set(cache_key, market_data, self.cache_timeout)
+                    
+                    # Update database
+                    self.update_market_data_db(market_data)
+                    
+                    logger.info(f"Successfully fetched real-time data for {symbol}")
+                    return market_data
+            except Exception as e:
+                logger.warning(f"Real-time data fetch failed for {symbol}: {e}")
             
-            if response and hasattr(response, 'data'):
-                market_data = {
-                    'symbol': symbol,
-                    'ltp': Decimal(str(response.data.get('last_price', 0))),
-                    'open_price': Decimal(str(response.data.get('ohlc', {}).get('open', 0))),
-                    'high_price': Decimal(str(response.data.get('ohlc', {}).get('high', 0))),
-                    'low_price': Decimal(str(response.data.get('ohlc', {}).get('low', 0))),
-                    'close_price': Decimal(str(response.data.get('ohlc', {}).get('close', 0))),
-                    'volume': response.data.get('volume', 0),
-                    'change_percent': Decimal(str(response.data.get('change_percent', 0))),
-                }
-                
-                # Cache the data
-                cache.set(cache_key, market_data, self.cache_timeout)
-                
-                # Update database
-                self.update_market_data_db(market_data)
-                
-                return market_data
+            # Fallback to historical data if real-time fails or is not available
+            if self.use_historical_fallback:
+                logger.info(f"Falling back to historical data for {symbol}")
+                historical_data = self.get_historical_market_data(symbol)
+                if historical_data:
+                    return historical_data
             
         except Exception as e:
             logger.error(f"Error fetching market data for {symbol}: {e}")
-            
-        # Fallback to database
+        
+        # Final fallback to database
+        logger.info(f"Falling back to database for {symbol}")
         return self.get_market_data_from_db(symbol)
+    
+    def get_market_data_batch(self, symbols: List[str]) -> Dict[str, Optional[Dict]]:
+        """Get market data for multiple symbols"""
+        results = {}
+        for symbol in symbols:
+            results[symbol] = self.get_market_data(symbol)
+        return results
     
     def update_market_data_db(self, market_data: Dict):
         """Update market data in database"""
         try:
+            # Remove data_source and timestamp before saving to DB if they exist
+            db_data = market_data.copy()
+            db_data.pop('data_source', None)
+            db_data.pop('timestamp', None)
+            
             MarketData.objects.update_or_create(
-                symbol=market_data['symbol'],
-                defaults=market_data
+                symbol=db_data['symbol'],
+                defaults=db_data
             )
+            logger.debug(f"Updated market data in DB for {db_data['symbol']}")
         except Exception as e:
             logger.error(f"Error updating market data in DB: {e}")
     
@@ -124,9 +247,17 @@ class MarketDataService:
                 'close_price': market_data.close_price,
                 'volume': market_data.volume,
                 'change_percent': market_data.change_percent,
+                'data_source': 'database',
+                'timestamp': market_data.updated_at if hasattr(market_data, 'updated_at') else None
             }
         except MarketData.DoesNotExist:
+            logger.warning(f"No market data found in database for {symbol}")
             return None
+    
+    def toggle_historical_fallback(self, enabled: bool):
+        """Enable or disable historical data fallback"""
+        self.use_historical_fallback = enabled
+        logger.info(f"Historical data fallback {'enabled' if enabled else 'disabled'}")
 
 
 class BalanceService:
