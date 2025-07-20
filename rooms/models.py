@@ -297,7 +297,7 @@ class Trade(models.Model):
     symbol = models.CharField(max_length=20)
     quantity = models.PositiveIntegerField()
     price = models.DecimalField(max_digits=10, decimal_places=2)
-    total_value = models.DecimalField(max_digits=15, decimal_places=2)
+    total_value = models.DecimalField(max_digits=15, decimal_places=2, null=True, blank=True)
     timestamp = models.DateTimeField(default=timezone.now)
     
     # Additional fields for better tracking
