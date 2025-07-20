@@ -36,7 +36,7 @@ class UserBalance(models.Model):
     room = models.ForeignKey(Room, on_delete=models.CASCADE)
     total_cash_balance = models.DecimalField(max_digits=15, decimal_places=2, default=100000.00)
     reserved_cash_balance = models.DecimalField(max_digits=15, decimal_places=2, default=0.00)
-    created_at = models.DateTimeField(auto_now_add=True)
+    created_at = models.DateTimeField(default=timezone.now, null=True, blank=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
