@@ -30,6 +30,6 @@ urlpatterns = [
     path('<int:room_id>/user-details/<int:user_id>/', AdminUserRoomDetailsView.as_view(), name='admin-user-room-details'),
     path('users/me/', UserMeView.as_view(), name='user-me'),
     path('<int:room_id>/close/', RoomCloseView.as_view(), name='close-room'),
-    path('/by-name/<str:room_name>/', RoomByNameView.as_view(), name='room-by-name'),
+    path('by-name/<str:room_name>/', RoomByNameView.as_view(), name='room-by-name'),
     path('<int:room_id>/participants/', ParticipantView.as_view(), name='Participants')
 ]
