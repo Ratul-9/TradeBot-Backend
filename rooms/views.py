@@ -561,13 +561,14 @@ class StockSearchView(APIView):
                     'error': 'Please Provide search query using q parameter'
                 }, status=status.HTTP_400_BAD_REQUEST)
             
-            if len(search_query)<1:
+            if len(search_query) < 1:
                 return Response({
                     'error': 'Search query must be at least 1 character long'
                 }, status=status.HTTP_400_BAD_REQUEST)
 
             results = []
 
+            # Search normal stocks
             normal_stocks = Stock.objects.filter(
                 Q(symbol__icontains=search_query) |
                 Q(name_of_company__icontains=search_query)
@@ -575,12 +576,13 @@ class StockSearchView(APIView):
 
             for stock in normal_stocks:
                 results.append({
-                    'symbol': stock['Symbol'],
-                    'name': stock['Name of Company'],
-                    'series': stock['Series'],
+                    'symbol': stock['symbol'],  # ✅ Fixed: lowercase key
+                    'name_of_company': stock['name_of_company'],  # ✅ Fixed: lowercase key with underscore
+                    'series': stock['series'],  # ✅ Fixed: lowercase key
                     'type': 'NSE'
                 })
 
+            # Search SME stocks with remaining limit
             remaining_limit = limit - len(results)
             if remaining_limit > 0:
                 sme_stocks = SMEStock.objects.filter(
@@ -590,19 +592,19 @@ class StockSearchView(APIView):
 
                 for stock in sme_stocks:
                     results.append({
-                        'symbol': stock['Symbol'],
-                        'name': stock['Name of Company'],
-                        'series': stock['Series'],
+                        'symbol': stock['symbol'],  # ✅ Fixed: lowercase key
+                        'name_of_company': stock['name_of_company'],  # ✅ Fixed: lowercase key with underscore
+                        'series': stock['series'],  # ✅ Fixed: lowercase key
                         'type': 'SME'
                     })
 
             # Sort results by symbol for consistent ordering
-            results.sort(key=lambda x: x['Symbol'])
+            results.sort(key=lambda x: x['symbol'])  # ✅ Fixed: lowercase key
 
             return Response({
                 'query': search_query,
                 'count': len(results),
-                'results': results
+                'stocks': results  # ✅ Changed from 'results' to 'stocks' to match frontend expectation
             }, status=status.HTTP_200_OK)
         
         except ValueError:
