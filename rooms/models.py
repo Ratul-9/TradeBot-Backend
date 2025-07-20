@@ -301,7 +301,7 @@ class Trade(models.Model):
     timestamp = models.DateTimeField(default=timezone.now)
     
     # Additional fields for better tracking
-    execution_id = models.CharField(max_length=50, unique=True)  # Unique execution identifier
+    execution_id = models.CharField(max_length=50, unique=True, null=True, blank=True)
     market_price_at_execution = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
     fees = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)
     
