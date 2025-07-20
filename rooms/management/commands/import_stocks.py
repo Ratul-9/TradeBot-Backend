@@ -87,11 +87,37 @@ class Command(BaseCommand):
                         isin_number = row.get('ISIN Number', '').strip()
                         face_value = self.parse_decimal(row.get('Face Value', '0'))
 
-                        # Validate required fields
-                        if not all([symbol, name_of_company, isin_number]):
+                        # Debug: Print the first few rows to understand the data
+                        if row_num <= 3:
+                            self.stdout.write(f'Row {row_num} data:')
+                            self.stdout.write(f'  Symbol: "{symbol}"')
+                            self.stdout.write(f'  Name of Company: "{name_of_company}"')
+                            self.stdout.write(f'  ISIN Number: "{isin_number}"')
+                            self.stdout.write(f'  Raw row keys: {list(row.keys())}')
+
+                        # Validate required fields with specific error messages
+                        if not symbol:
                             self.stdout.write(
                                 self.style.WARNING(
-                                    f'Row {row_num}: Missing required fields - skipping'
+                                    f'Row {row_num}: Missing Symbol - skipping'
+                                )
+                            )
+                            error_count += 1
+                            continue
+                        
+                        if not name_of_company:
+                            self.stdout.write(
+                                self.style.WARNING(
+                                    f'Row {row_num}: Missing Name of Company - skipping'
+                                )
+                            )
+                            error_count += 1
+                            continue
+                            
+                        if not isin_number:
+                            self.stdout.write(
+                                self.style.WARNING(
+                                    f'Row {row_num}: Missing ISIN Number - skipping'
                                 )
                             )
                             error_count += 1
@@ -140,7 +166,7 @@ class Command(BaseCommand):
             
         date_string = date_string.strip()
         
-        # Common date formats
+        # Common date formats including 2-digit years
         date_formats = [
             '%Y-%m-%d',      # 2023-12-31
             '%d-%m-%Y',      # 31-12-2023
@@ -149,13 +175,64 @@ class Command(BaseCommand):
             '%Y/%m/%d',      # 2023/12/31
             '%d-%b-%Y',      # 31-Dec-2023
             '%d %b %Y',      # 31 Dec 2023
+            '%d-%b-%y',      # 15-Oct-15 (2-digit year)
+            '%d %b %y',      # 15 Oct 15
+            '%d/%b/%y',      # 15/Oct/15
+            '%d-%m-%y',      # 15-10-15
+            '%d/%m/%y',      # 15/10/15
+            '%y-%m-%d',      # 15-10-31
         ]
         
         for fmt in date_formats:
             try:
-                return datetime.strptime(date_string, fmt).date()
+                parsed_date = datetime.strptime(date_string, fmt).date()
+                # If 2-digit year, assume it's 20xx if < 50, else 19xx
+                if parsed_date.year < 50:
+                    parsed_date = parsed_date.replace(year=parsed_date.year + 2000)
+                elif parsed_date.year < 100:
+                    parsed_date = parsed_date.replace(year=parsed_date.year + 1900)
+                return parsed_date
             except ValueError:
                 continue
+                
+        # If none of the formats work, try to be more flexible
+        # Check for common separators and handle them
+        for separator in ['-', '/', ' ']:
+            if separator in date_string:
+                parts = date_string.split(separator)
+                if len(parts) == 3:
+                    # Try different arrangements
+                    arrangements = [
+                        (parts[0], parts[1], parts[2]),  # day-month-year
+                        (parts[2], parts[1], parts[0]),  # year-month-day
+                        (parts[1], parts[0], parts[2]),  # month-day-year
+                    ]
+                    
+                    for day, month, year in arrangements:
+                        try:
+                            # Convert month name to number if needed
+                            month_names = {
+                                'jan': '01', 'feb': '02', 'mar': '03', 'apr': '04',
+                                'may': '05', 'jun': '06', 'jul': '07', 'aug': '08',
+                                'sep': '09', 'oct': '10', 'nov': '11', 'dec': '12'
+                            }
+                            
+                            if month.lower() in month_names:
+                                month = month_names[month.lower()]
+                            
+                            # Handle 2-digit years
+                            if len(year) == 2:
+                                year_int = int(year)
+                                if year_int < 50:
+                                    year = f"20{year}"
+                                else:
+                                    year = f"19{year}"
+                            
+                            # Try to create date
+                            parsed_date = datetime.strptime(f"{year}-{month:0>2}-{day:0>2}", '%Y-%m-%d').date()
+                            return parsed_date
+                        except (ValueError, TypeError):
+                            continue
                 
         self.stdout.write(
             self.style.WARNING(f'Could not parse date: {date_string}')
