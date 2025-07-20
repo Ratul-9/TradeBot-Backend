@@ -7,7 +7,7 @@ from django.db import models
 from django.db.models import Sum
 from rest_framework import status
 from django.shortcuts import get_object_or_404
-from .models import Room, RoomParticipant, UserBalance, Trade
+from .models import Room, RoomParticipant, UserBalance, Trade, OrderBook
 from .serializers import RoomSerializer, JoinRoomSerializer, LeaveRoomSerializer, LiveRoomStatusSerializer, CloseRoomSerializer
 from django.contrib.auth import get_user_model
 from rest_framework import permissions, status
@@ -19,6 +19,7 @@ from django.db.models import ExpressionWrapper
 from .models import Stock, SMEStock
 from django.db.models import Q
 
+from .services import trading_service, market_service, balance_service, portfolio_service
 
 User = get_user_model()
 
@@ -59,27 +60,19 @@ class JoinRoomView(APIView):
 
         user = request.user
 
-        # Create or update participant
         participant, created = RoomParticipant.objects.get_or_create(
             user=user,
             room=room,
             defaults={'join_time': timezone.now(), 'is_active': True}
         )
         if not created:
-            # If participant exists but is inactive, reactivate them
             if not participant.is_active:
                 participant.is_active = True
                 participant.join_time = timezone.now()
                 participant.leave_time = None
                 participant.save()
-        user_balance, balance_created = UserBalance.objects.get_or_create(
-            user=user,
-            room=room,
-            defaults={'cash_balance': 100000.00}  
-        )
-        if not balance_created:
-            user_balance.cash_balance = 100000.00  
-            user_balance.save()
+
+        user_balance = balance_service.get_or_create_balance(user, room)
 
         return Response({
             'message': f'Joined room "{room.name}" successfully.',
@@ -96,7 +89,6 @@ class LeaveRoomView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request, room_id):
-
         user = request.user
 
         try:
@@ -122,20 +114,15 @@ class RoomCloseView(APIView):
         if request.user != room.admin:
             return Response({"error": "Only admin can close the room."}, status=403)
 
-       
         room.is_closed = True
         room.save()
 
-        
         RoomParticipant.objects.filter(room=room).exclude(user=room.admin).update(
             is_active=False,
             leave_time=timezone.now()
         )
 
         return Response({"message": "Room closed and all participants removed (except admin)."}, status=200)
-
-
-from django.utils import timezone
 
 class LiveRoomView(APIView):
     permission_classes = [IsAuthenticated]
@@ -144,12 +131,12 @@ class LiveRoomView(APIView):
         try:
             room = Room.objects.get(id=room_id)
         except Room.DoesNotExist:
-            return Response({"error": "Room Not  Found"}, status=status.HTTP_404_NOT_FOUND)
+            return Response({"error": "Room Not Found"}, status=status.HTTP_404_NOT_FOUND)
         
         room.refresh_from_db()
         availability = room.is_closed
 
-        return Response({"is_closed" : availability} , status=status.HTTP_200_OK)
+        return Response({"is_closed": availability}, status=status.HTTP_200_OK)
 
 class ParticipantView(APIView):
     permission_classes = [IsAuthenticated]
@@ -158,23 +145,20 @@ class ParticipantView(APIView):
         try:
             room = Room.objects.get(id=room_id)
         except Room.DoesNotExist:
-            return Response({'error' : 'Room Not Found'}, status=status.HTTP_404_NOT_FOUND)
+            return Response({'error': 'Room Not Found'}, status=status.HTTP_404_NOT_FOUND)
         
         check_and_close_room(room)
-
         room.refresh_from_db()
 
         participants = RoomParticipant.objects.filter(room=room, is_active=True).order_by('join_time')
         participant_data = []
 
         for participant in participants:
-            balance = UserBalance.objects.filter(user=participant.user, room=room).first()
+            balance = balance_service.get_or_create_balance(participant.user, room)
             participant_data.append({
-
                 'username': participant.user.username,
-                'cash_balance': str(balance.cash_balance) if balance else "0.00",
+                'cash_balance': str(balance.available_cash_balance),
                 'join_time': participant.join_time,
-
             })
         
         return Response(participant_data, status=status.HTTP_200_OK)
@@ -188,7 +172,6 @@ class RoomDetailView(APIView):
         except Room.DoesNotExist:
             return Response({'error': 'Room not found'}, status=status.HTTP_404_NOT_FOUND)
         
-        # Debug: Check room status and times
         now = timezone.now()
         print(f"=== Room Detail Debug ===")
         print(f"Room ID: {room_id}")
@@ -200,14 +183,13 @@ class RoomDetailView(APIView):
         print(f"Time until end: {room.end_time - now if room.end_time else 'No end time'}")
         print(f"Is time past end? {now > room.end_time if room.end_time else 'No end time'}")
         
-        # Check and close room if needed
+
         check_and_close_room(room)
         
-        # Refresh from database to get updated status
+        
         room.refresh_from_db()
         print(f"is_closed AFTER check: {room.is_closed}")
-        
-        # Check if room is closed and user is not admin
+      
         if room.is_closed and request.user != room.admin:
             print(f"Room is closed and user {request.user.username} is not admin {room.admin.username}")
             return Response({"error": "Room is closed"}, status=403)
@@ -216,10 +198,11 @@ class RoomDetailView(APIView):
         participant_data = []
 
         for participant in participants:
-            balance = UserBalance.objects.filter(user=participant.user, room=room).first()
+           
+            balance = balance_service.get_or_create_balance(participant.user, room)
             participant_data.append({
                 'username': participant.user.username,
-                'cash_balance': str(balance.cash_balance) if balance else "0.00",
+                'cash_balance': str(balance.available_cash_balance),
                 'join_time': participant.join_time,
             })
 
@@ -249,7 +232,6 @@ class RoomTradeBuyView(APIView):
             if not room:
                 return Response({"error": "Room not found"}, status=status.HTTP_404_NOT_FOUND)
 
-            
             now = timezone.now()
             check_and_close_room(room)
             if room.is_closed:
@@ -258,12 +240,11 @@ class RoomTradeBuyView(APIView):
             if not (room.start_time and room.end_time and room.start_time <= now <= room.end_time):
                 return Response({"error": "Room is not active yet"}, status=403)
 
-            
             participant = RoomParticipant.objects.filter(user=user, room=room, is_active=True).first()
             if not participant:
                 return Response({"error": "You are not an active participant in this room"}, status=status.HTTP_403_FORBIDDEN)
 
-            
+            # Extract order data
             symbol = data.get("symbol")
             quantity = int(data.get("quantity", 0))
             price_per_stock = Decimal(data.get("price_per_stock", 0))
@@ -271,35 +252,31 @@ class RoomTradeBuyView(APIView):
             if not symbol or quantity <= 0 or price_per_stock <= 0:
                 return Response({"error": "Invalid input"}, status=status.HTTP_400_BAD_REQUEST)
 
-            total_price = quantity * price_per_stock
+            # Prepare order data for trading service
+            order_data = {
+                'order_type': OrderBook.BUY,
+                'symbol': symbol,
+                'quantity': quantity,
+                'order_price': price_per_stock,
+                'order_category': OrderBook.MARKET,  # Market order for immediate execution
+            }
 
-            
-            user_balance = UserBalance.objects.filter(user=user, room=room).first()
-            if not user_balance:
-                return Response({"error": "User balance not found for this room"}, status=status.HTTP_404_NOT_FOUND)
+            # Use trading service to place the order
+            success, message, order = trading_service.place_order(user, room, order_data)
 
-            if user_balance.cash_balance < total_price:
-                return Response({"error": "Insufficient balance in this room"}, status=status.HTTP_400_BAD_REQUEST)
+            if success:
+                return Response({
+                    "message": message,
+                    "order_id": order.id if order else None,
+                    "trade_executed": True
+                }, status=status.HTTP_201_CREATED)
+            else:
+                return Response({"error": message}, status=status.HTTP_400_BAD_REQUEST)
 
-            
-            user_balance.cash_balance -= total_price
-            user_balance.save()
-
-            
-            trade = Trade.objects.create(
-                user=user,
-                room=room,
-                trade_type="BUY",
-                symbol=symbol,
-                quantity=quantity,
-                price=price_per_stock,
-            )
-
-            return Response({"message": "Trade executed successfully", "trade_id": trade.id}, status=status.HTTP_201_CREATED)
-
+        except ValueError as e:
+            return Response({"error": f"Invalid data format: {str(e)}"}, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
             return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
 
 class RoomTradeSellView(APIView):
     permission_classes = [permissions.IsAuthenticated]
@@ -309,12 +286,10 @@ class RoomTradeSellView(APIView):
             user = request.user
             data = request.data
 
-            
             room = Room.objects.filter(id=room_id).first()
             if not room:
                 return Response({"error": "Room not found"}, status=status.HTTP_404_NOT_FOUND)
 
-            
             now = timezone.now()
             check_and_close_room(room)
             if room.is_closed:
@@ -323,11 +298,11 @@ class RoomTradeSellView(APIView):
             if not (room.start_time and room.end_time and room.start_time <= now <= room.end_time):
                 return Response({"error": "Room is not active yet"}, status=403)
 
-            
             participant = RoomParticipant.objects.filter(user=user, room=room, is_active=True).first()
             if not participant:
                 return Response({"error": "You are not an active participant in this room"}, status=status.HTTP_403_FORBIDDEN)
 
+            # Extract order data
             symbol = data.get("symbol")
             quantity = int(data.get("quantity", 0))
             price_per_stock = Decimal(data.get("price_per_stock", 0))
@@ -335,37 +310,29 @@ class RoomTradeSellView(APIView):
             if not symbol or quantity <= 0 or price_per_stock <= 0:
                 return Response({"error": "Invalid input"}, status=status.HTTP_400_BAD_REQUEST)
 
-            
-            total_bought = Trade.objects.filter(user=user, room=room, symbol=symbol, trade_type="BUY").aggregate(total=models.Sum("quantity"))["total"] or 0
-            total_sold = Trade.objects.filter(user=user, room=room, symbol=symbol, trade_type="SELL").aggregate(total=models.Sum("quantity"))["total"] or 0
+            # Prepare order data for trading service
+            order_data = {
+                'order_type': OrderBook.SELL,
+                'symbol': symbol,
+                'quantity': quantity,
+                'order_price': price_per_stock,
+                'order_category': OrderBook.MARKET,  # Market order for immediate execution
+            }
 
-            available_quantity = total_bought - total_sold
+            # Use trading service to place the order
+            success, message, order = trading_service.place_order(user, room, order_data)
 
-            if available_quantity < quantity:
-                return Response({"error": "Not enough holdings to sell"}, status=status.HTTP_400_BAD_REQUEST)
+            if success:
+                return Response({
+                    "message": message,
+                    "order_id": order.id if order else None,
+                    "trade_executed": True
+                }, status=status.HTTP_201_CREATED)
+            else:
+                return Response({"error": message}, status=status.HTTP_400_BAD_REQUEST)
 
-            
-            total_price = quantity * price_per_stock
-            user_balance = UserBalance.objects.filter(user=user, room=room).first()
-
-            if not user_balance:
-                return Response({"error": "User balance not found for this room"}, status=status.HTTP_404_NOT_FOUND)
-
-            user_balance.cash_balance += total_price
-            user_balance.save()
-
-            
-            trade = Trade.objects.create(
-                user=user,
-                room=room,
-                trade_type="SELL",
-                symbol=symbol,
-                quantity=quantity,
-                price=price_per_stock,
-            )
-
-            return Response({"message": "Sell trade executed successfully", "trade_id": trade.id}, status=status.HTTP_201_CREATED)
-
+        except ValueError as e:
+            return Response({"error": f"Invalid data format: {str(e)}"}, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
             return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
@@ -378,43 +345,14 @@ class RoomLeaderboardView(APIView):
         except Room.DoesNotExist:
             return Response({"error": "Room not found"}, status=404)
 
-        
         check_and_close_room(room)
-
-        
         now = timezone.now()
 
-        
         if room.end_time and now > room.end_time and request.user != room.admin:
             return Response({"error": "Room is closed. Only the admin can view the leaderboard."}, status=403)
 
-        
-        participants = RoomParticipant.objects.filter(room=room)
-        leaderboard = []
-
-        for participant in participants:
-            user = participant.user
-            trades = Trade.objects.filter(user=user, room=room)
-
-            pnl = 0
-            for trade in trades:
-                if trade.trade_type == Trade.BUY:
-                    pnl -= trade.quantity * float(trade.price)
-                elif trade.trade_type == Trade.SELL:
-                    pnl += trade.quantity * float(trade.price)
-
-            try:
-                balance = UserBalance.objects.get(user=user, room=room)
-                total_value = pnl + float(balance.cash_balance)
-            except UserBalance.DoesNotExist:
-                total_value = pnl
-
-            leaderboard.append({
-                "username": user.username,
-                "net_worth": round(total_value, 2)
-            })
-
-        leaderboard.sort(key=lambda x: x["net_worth"], reverse=True)
+        # Use trading service to get leaderboard
+        leaderboard = trading_service.get_room_leaderboard(room)
 
         return Response({
             "room": room.name,
@@ -422,7 +360,6 @@ class RoomLeaderboardView(APIView):
             "leaderboard": leaderboard
         }, status=200)
 
-    
 class RoomTradeHistoryView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -433,7 +370,7 @@ class RoomTradeHistoryView(APIView):
             return Response({"error": "Room not found"}, status=404)
 
         user = request.user
-        trades = Trade.objects.filter(user=user, room=room).order_by("-timestamp")
+        trades = Trade.objects.filter(user=user, room=room).order_by("-trade_timestamp")
 
         trade_history = [
             {
@@ -441,7 +378,8 @@ class RoomTradeHistoryView(APIView):
                 "trade_type": trade.trade_type,
                 "quantity": trade.quantity,
                 "price": str(trade.price),
-                "timestamp": trade.timestamp,
+                "total_value": str(trade.total_value),
+                "timestamp": trade.trade_timestamp,
             }
             for trade in trades
         ]
@@ -451,10 +389,6 @@ class RoomTradeHistoryView(APIView):
             "username": user.username,
             "trade_history": trade_history
         }, status=200)
-    
-
-
-
 
 class AdminUserRoomDetailsView(APIView):
     permission_classes = [IsAuthenticated]
@@ -470,44 +404,46 @@ class AdminUserRoomDetailsView(APIView):
 
         user = get_object_or_404(User, id=user_id)
 
-        trades = Trade.objects.filter(user=user, room=room)
-        holdings = {}
-        for trade in trades:
-            if trade.symbol not in holdings:
-                holdings[trade.symbol] = 0
-            if trade.trade_type == Trade.BUY:
-                holdings[trade.symbol] += trade.quantity
-            else:
-                holdings[trade.symbol] -= trade.quantity
+        # Use trading service to get comprehensive user portfolio summary
+        portfolio_summary = trading_service.get_user_portfolio_summary(user, room)
 
-        portfolio = [
-            {"symbol": sym, "quantity": qty} for sym, qty in holdings.items() if qty > 0
-        ]
+        # Get detailed holdings
+        from .models import UserPortfolio
+        portfolios = UserPortfolio.objects.filter(user=user, room=room, total_quantity__gt=0)
+        
+        holdings = []
+        for portfolio in portfolios:
+            # Get current market data for each holding
+            market_data = market_service.get_market_data(portfolio.symbol)
+            current_price = market_data['ltp'] if market_data else portfolio.average_buy_price
+            
+            holdings.append({
+                "symbol": portfolio.symbol,
+                "quantity": portfolio.total_quantity,
+                "average_buy_price": str(portfolio.average_buy_price),
+                "current_price": str(current_price),
+                "total_buy_value": str(portfolio.total_buy_value),
+                "current_value": str(portfolio.total_quantity * current_price),
+                "unrealized_pnl": str(portfolio.calculate_unrealized_pnl(current_price))
+            })
 
+        trades = Trade.objects.filter(user=user, room=room).order_by('-trade_timestamp')[:20]
         trade_history = [
             {
                 "symbol": trade.symbol,
                 "type": trade.trade_type,
                 "quantity": trade.quantity,
                 "price": str(trade.price),
-                "timestamp": trade.timestamp
+                "total_value": str(trade.total_value),
+                "timestamp": trade.trade_timestamp
             }
-            for trade in trades.order_by('-timestamp')
+            for trade in trades
         ]
-
-        user_balance = UserBalance.objects.filter(user=user, room=room).first()
-        cash_balance = float(user_balance.cash_balance) if user_balance else 0
-
-        total_buy = sum(trade.quantity * float(trade.price) for trade in trades if trade.trade_type == "BUY")
-        total_sell = sum(trade.quantity * float(trade.price) for trade in trades if trade.trade_type == "SELL")
-        pnl = total_sell - total_buy
-        net_worth = cash_balance + pnl
 
         return Response({
             "username": user.username,
-            "portfolio_value": round(net_worth, 2),
-            "cash_balance": cash_balance,
-            "stock_holdings": portfolio,
+            "portfolio_summary": portfolio_summary,
+            "stock_holdings": holdings,
             "trade_history": trade_history,
         }, status=200)
     
@@ -541,8 +477,8 @@ class RoomByNameView(APIView):
             return Response({
                 'id': room.id,
                 'name': room.name,
-                'code': getattr(room, 'code', None),  # If you have a code field
-                'has_password': bool(room.password),  # Don't return the actual password
+                'code': getattr(room, 'code', None),  
+                'has_password': bool(room.password),  
             }, status=status.HTTP_200_OK)
 
         except Exception as e:
@@ -576,9 +512,9 @@ class StockSearchView(APIView):
 
             for stock in normal_stocks:
                 results.append({
-                    'symbol': stock['symbol'],  # ✅ Fixed: lowercase key
-                    'name_of_company': stock['name_of_company'],  # ✅ Fixed: lowercase key with underscore
-                    'series': stock['series'],  # ✅ Fixed: lowercase key
+                    'symbol': stock['symbol'],
+                    'name_of_company': stock['name_of_company'],
+                    'series': stock['series'],
                     'type': 'NSE'
                 })
 
@@ -592,19 +528,19 @@ class StockSearchView(APIView):
 
                 for stock in sme_stocks:
                     results.append({
-                        'symbol': stock['symbol'],  # ✅ Fixed: lowercase key
-                        'name_of_company': stock['name_of_company'],  # ✅ Fixed: lowercase key with underscore
-                        'series': stock['series'],  # ✅ Fixed: lowercase key
+                        'symbol': stock['symbol'],
+                        'name_of_company': stock['name_of_company'],
+                        'series': stock['series'],
                         'type': 'SME'
                     })
 
             # Sort results by symbol for consistent ordering
-            results.sort(key=lambda x: x['symbol'])  # ✅ Fixed: lowercase key
+            results.sort(key=lambda x: x['symbol'])
 
             return Response({
                 'query': search_query,
                 'count': len(results),
-                'stocks': results  # ✅ Changed from 'results' to 'stocks' to match frontend expectation
+                'stocks': results
             }, status=status.HTTP_200_OK)
         
         except ValueError:
@@ -617,6 +553,214 @@ class StockSearchView(APIView):
                 'error': f'An error occurred while searching: {str(e)}'
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
+class MarketDataView(APIView):
+    """
+    New view to get current market data for a stock
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, room_id):
+        try:
+            room = Room.objects.filter(id=room_id).first()
+            if not room:
+                return Response({"error": "Room not found"}, status=status.HTTP_404_NOT_FOUND)
+
+            participant = RoomParticipant.objects.filter(
+                user=request.user, 
+                room=room, 
+                is_active=True
+            ).first()
+            if not participant:
+                return Response({
+                    "error": "You are not an active participant in this room"
+                }, status=status.HTTP_403_FORBIDDEN)
+
+            symbol = request.GET.get('symbol', '').strip()
+            if not symbol:
+                return Response({
+                    "error": "Symbol parameter is required"
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+            # Use market service to get market data
+            market_data = market_service.get_market_data(symbol)
+            
+            if market_data:
+                return Response({
+                    "success": True,
+                    "symbol": symbol,
+                    "market_data": market_data
+                }, status=status.HTTP_200_OK)
+            else:
+                return Response({
+                    "error": "Market data not available for this symbol",
+                    "symbol": symbol
+                }, status=status.HTTP_404_NOT_FOUND)
+
+        except Exception as e:
+            return Response({
+                "error": f"An error occurred: {str(e)}"
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+class UserPortfolioView(APIView):
+    """
+    New view to get user's portfolio summary
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, room_id):
+        try:
+            room = Room.objects.filter(id=room_id).first()
+            if not room:
+                return Response({"error": "Room not found"}, status=status.HTTP_404_NOT_FOUND)
+
+            participant = RoomParticipant.objects.filter(
+                user=request.user, 
+                room=room, 
+                is_active=True
+            ).first()
+            if not participant:
+                return Response({
+                    "error": "You are not an active participant in this room"
+                }, status=status.HTTP_403_FORBIDDEN)
+
+            # Use trading service to get comprehensive portfolio summary
+            portfolio_summary = trading_service.get_user_portfolio_summary(request.user, room)
+
+            # Get detailed holdings
+            from .models import UserPortfolio
+            portfolios = UserPortfolio.objects.filter(user=request.user, room=room, total_quantity__gt=0)
+            
+            holdings = []
+            for portfolio in portfolios:
+                # Get current market data for each holding
+                market_data = market_service.get_market_data(portfolio.symbol)
+                current_price = market_data['ltp'] if market_data else portfolio.average_buy_price
+                
+                holdings.append({
+                    "symbol": portfolio.symbol,
+                    "quantity": portfolio.total_quantity,
+                    "average_buy_price": str(portfolio.average_buy_price),
+                    "current_price": str(current_price),
+                    "total_investment": str(portfolio.total_buy_value - portfolio.total_sell_value),
+                    "current_value": str(portfolio.total_quantity * current_price),
+                    "unrealized_pnl": str(portfolio.calculate_unrealized_pnl(current_price)),
+                    "realized_pnl": str(portfolio.realized_pnl)
+                })
+
+            return Response({
+                "portfolio_summary": portfolio_summary,
+                "holdings": holdings,
+                "room": {
+                    "id": room.id,
+                    "name": room.name
+                }
+            }, status=status.HTTP_200_OK)
+
+        except Exception as e:
+            return Response({
+                "error": f"An error occurred: {str(e)}"
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+class OrderHistoryView(APIView):
+    """
+    New view to get user's order history
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, room_id):
+        try:
+            room = Room.objects.filter(id=room_id).first()
+            if not room:
+                return Response({"error": "Room not found"}, status=status.HTTP_404_NOT_FOUND)
+
+            participant = RoomParticipant.objects.filter(
+                user=request.user, 
+                room=room, 
+                is_active=True
+            ).first()
+            if not participant:
+                return Response({
+                    "error": "You are not an active participant in this room"
+                }, status=status.HTTP_403_FORBIDDEN)
+
+            orders = OrderBook.objects.filter(user=request.user, room=room).order_by('-order_timestamp')
+
+            order_history = []
+            for order in orders:
+                order_history.append({
+                    "id": order.id,
+                    "symbol": order.symbol,
+                    "order_type": order.order_type,
+                    "order_category": order.order_category,
+                    "quantity": order.quantity,
+                    "filled_quantity": order.filled_quantity,
+                    "remaining_quantity": order.remaining_quantity,
+                    "order_price": str(order.order_price),
+                    "executed_price": str(order.executed_price) if order.executed_price else None,
+                    "order_status": order.order_status,
+                    "order_timestamp": order.order_timestamp,
+                    "execution_timestamp": order.execution_timestamp,
+                    "cancellation_timestamp": order.cancellation_timestamp,
+                    "notes": order.notes
+                })
+
+            return Response({
+                "room": {
+                    "id": room.id,
+                    "name": room.name
+                },
+                "orders": order_history
+            }, status=status.HTTP_200_OK)
+
+        except Exception as e:
+            return Response({
+                "error": f"An error occurred: {str(e)}"
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+class CancelOrderView(APIView):
+    """
+    New view to cancel pending orders
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, room_id, order_id):
+        try:
+            room = Room.objects.filter(id=room_id).first()
+            if not room:
+                return Response({"error": "Room not found"}, status=status.HTTP_404_NOT_FOUND)
+
+            participant = RoomParticipant.objects.filter(
+                user=request.user, 
+                room=room, 
+                is_active=True
+            ).first()
+            if not participant:
+                return Response({
+                    "error": "You are not an active participant in this room"
+                }, status=status.HTTP_403_FORBIDDEN)
+
+            # Get the order
+            try:
+                order = OrderBook.objects.get(id=order_id, user=request.user, room=room)
+            except OrderBook.DoesNotExist:
+                return Response({"error": "Order not found"}, status=status.HTTP_404_NOT_FOUND)
+
+            reason = request.data.get('reason', '')
+
+            # Use trading service to cancel the order
+            success, message = trading_service.cancel_order(order, reason)
+
+            if success:
+                return Response({"message": message}, status=status.HTTP_200_OK)
+            else:
+                return Response({"error": message}, status=status.HTTP_400_BAD_REQUEST)
+
+        except Exception as e:
+            return Response({
+                "error": f"An error occurred: {str(e)}"
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+# Keep the existing historical data views as they are working well
 class HistoricalDataView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -626,8 +770,7 @@ class HistoricalDataView(APIView):
             room = Room.objects.filter(id=room_id).first()
             if not room:
                 return Response({"error": "Room not found"}, status=status.HTTP_404_NOT_FOUND)
-
-            # Check if user is active participant in the room
+            
             participant = RoomParticipant.objects.filter(
                 user=request.user, 
                 room=room, 
@@ -638,200 +781,84 @@ class HistoricalDataView(APIView):
                     "error": "You are not an active participant in this room"
                 }, status=status.HTTP_403_FORBIDDEN)
 
-            # Get query parameters
-            symbol = request.GET.get('symbol', '').strip()
-            time_interval = request.GET.get('time_interval', '1D')  # Default to 1 Day
+            symbol = request.GET.get('symbol', '').strip().upper()
+            interval = request.GET.get('interval', '1minute')
+            to_date = request.GET.get('to_date', timezone.now().strftime('%Y-%m-%d'))
+            from_date = request.GET.get('from_date', (timezone.now() - timezone.timedelta(days=30)).strftime('%Y-%m-%d'))
 
-            # Validate required parameters
             if not symbol:
                 return Response({
                     "error": "Symbol parameter is required"
                 }, status=status.HTTP_400_BAD_REQUEST)
 
-            # Look up ISIN number from database based on symbol
-            try:
-                # First try to find in regular stocks
-                stock = Stock.objects.filter(symbol=symbol).first()
-                if stock:
-                    isin = stock.isin_number
-                    exchange = "NSE_EQ"  # Regular NSE stock
-                else:
-                    # Try SME stocks
-                    sme_stock = SMEStock.objects.filter(symbol=symbol).first()
-                    if sme_stock:
-                        isin = sme_stock.isin_number
-                        exchange = "NSE_SME"  # SME stock
-                    else:
-                        return Response({
-                            "error": f"Stock symbol '{symbol}' not found in database"
-                        }, status=status.HTTP_404_NOT_FOUND)
-
-                # Create instrument key in Upstox format
-                instrument_key = f"{exchange}|{isin}"
-
-            except Exception as e:
+            # Get instrument key for the symbol
+            instrument_key = market_service.get_instrument_key(symbol)
+            if not instrument_key:
                 return Response({
-                    "error": f"Error looking up stock information: {str(e)}"
-                }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+                    "error": f"Instrument key not found for symbol: {symbol}"
+                }, status=status.HTTP_404_NOT_FOUND)
 
-            # Define time interval mappings
-            time_interval_mapping = {
-                '1D': {'days': 1, 'name': '1 Day', 'interval': 'minute', 'interval_value': '1'},
-                '1W': {'days': 7, 'name': '1 Week', 'interval': 'minute', 'interval_value': '5'},
-                '1M': {'days': 30, 'name': '1 Month', 'interval': 'minute', 'interval_value': '30'},
-                '3M': {'days': 90, 'name': '3 Months', 'interval': 'day', 'interval_value': '1'},
-                '6M': {'days': 180, 'name': '6 Months', 'interval': 'day', 'interval_value': '1'},
-                '1Y': {'days': 365, 'name': '1 Year', 'interval': 'day', 'interval_value': '1'},
-                'YTD': {'ytd': True, 'name': 'Year to Date', 'interval': 'day', 'interval_value': '1'},
-                'ALL': {'days': 365 * 2, 'name': 'All Time (2 Years)', 'interval': 'day', 'interval_value': '1'}
-            }
-
-            # Validate time interval
-            if time_interval not in time_interval_mapping:
-                return Response({
-                    "error": f"Invalid time_interval. Available options: {', '.join(time_interval_mapping.keys())}",
-                    "available_intervals": [
-                        {"key": k, "name": v["name"]} for k, v in time_interval_mapping.items()
-                    ]
-                }, status=status.HTTP_400_BAD_REQUEST)
-
-            # Calculate date range based on selected time interval
-            from datetime import datetime, timedelta
-            
-            now = timezone.now()
-            
-            if time_interval == 'YTD':
-                # Year to Date
-                from_date = datetime(now.year, 1, 1).strftime('%Y-%m-%d')
-                to_date = now.strftime('%Y-%m-%d')
-            else:
-                # Calculate from current date backwards
-                days_back = time_interval_mapping[time_interval]['days']
-                from_datetime = now - timedelta(days=days_back)
-                from_date = from_datetime.strftime('%Y-%m-%d')
-                to_date = now.strftime('%Y-%m-%d')
-
-            # Get interval details for this time period
-            interval_type = time_interval_mapping[time_interval]['interval']
-            interval_value = time_interval_mapping[time_interval]['interval_value']
-
-            # Configure Upstox client
             try:
-                # Initialize the History V3 API
-                apiInstance = upstox_client.HistoryV3Api()
+                # Initialize Upstox API client for historical data
+                historical_api = upstox_client.HistoryApi()
                 
-                # Make API call using V3 format
-                # Format: get_historical_candle_data1(instrument_key, interval, interval_value, to_date, from_date)
-                response = apiInstance.get_historical_candle_data1(
-                    instrument_key, 
-                    interval_type, 
-                    interval_value, 
-                    to_date, 
-                    from_date
+                # Fetch historical data from Upstox
+                response = historical_api.get_historical_candle_data1(
+                    instrument_key=instrument_key,
+                    interval=interval,
+                    to_date=to_date,
+                    from_date=from_date
                 )
 
-                # Process the response
-                if response and hasattr(response, 'data') and response.data:
-                    candles_data = response.data.get('candles', [])
+                if response and hasattr(response, 'data') and response.data.get('candles'):
+                    candles = response.data['candles']
                     
-                    # Format the data for frontend consumption
-                    formatted_data = []
-                    for candle in candles_data:
-                        if len(candle) >= 5:  # Ensure we have all required data
-                            formatted_data.append({
-                                'timestamp': candle[0],  # Unix timestamp
-                                'datetime': datetime.fromtimestamp(candle[0]/1000).strftime('%Y-%m-%d %H:%M:%S') if candle[0] else None,
+                    # Format candle data
+                    formatted_candles = []
+                    for candle in candles:
+                        if len(candle) >= 6:
+                            formatted_candles.append({
+                                'timestamp': candle[0],
                                 'open': float(candle[1]),
                                 'high': float(candle[2]),
                                 'low': float(candle[3]),
                                 'close': float(candle[4]),
-                                'volume': int(candle[5]) if len(candle) > 5 else 0
+                                'volume': int(candle[5])
                             })
 
-                    # Calculate basic statistics for the chart
-                    statistics = {}
-                    if formatted_data:
-                        prices = [candle['close'] for candle in formatted_data]
-                        first_price = formatted_data[0]['open']
-                        last_price = formatted_data[-1]['close']
-                        
-                        statistics = {
-                            'symbol': symbol,
-                            'current_price': last_price,
-                            'opening_price': first_price,
-                            'highest_price': max(prices),
-                            'lowest_price': min(prices),
-                            'price_change': round(last_price - first_price, 2),
-                            'price_change_percent': round(
-                                ((last_price - first_price) / first_price) * 100, 2
-                            ) if first_price > 0 else 0,
-                            'total_volume': sum(candle['volume'] for candle in formatted_data),
-                            'total_trades': len(formatted_data)
-                        }
-
                     return Response({
-                        "success": True,
                         "symbol": symbol,
-                        "instrument_key": instrument_key,
-                        "exchange": exchange,
-                        "time_interval": time_interval,
-                        "time_interval_name": time_interval_mapping[time_interval]['name'],
-                        "interval_type": interval_type,
-                        "interval_value": interval_value,
+                        "interval": interval,
                         "from_date": from_date,
                         "to_date": to_date,
-                        "data_points": len(formatted_data),
-                        "statistics": statistics,
-                        "chart_data": formatted_data  
+                        "candles": formatted_candles
                     }, status=status.HTTP_200_OK)
-
                 else:
                     return Response({
-                        "error": "No historical data found for the given parameters",
-                        "symbol": symbol,
-                        "instrument_key": instrument_key,
-                        "time_interval": time_interval,
-                        "suggestions": [
-                            "Try a different time interval",
-                            "Check if the stock was actively traded during this period",
-                            "Verify the stock symbol is correct"
-                        ]
+                        "error": "No historical data available for this symbol",
+                        "symbol": symbol
                     }, status=status.HTTP_404_NOT_FOUND)
 
-            except Exception as e:
-                error_message = f"Upstox API Error: {str(e)}"
-                
-                # Handle specific Upstox API errors
-                if "ApiException" in str(type(e)):
-                    try:
-                        import json
-                        if hasattr(e, 'body') and e.body:
-                            error_data = json.loads(e.body)
-                            error_message = error_data.get('message', error_message)
-                    except:
-                        pass
-
+            except Exception as api_error:
                 return Response({
-                    "error": error_message,
-                    "symbol": symbol,
-                    "instrument_key": instrument_key if 'instrument_key' in locals() else None,
-                    "time_interval": time_interval
-                }, status=status.HTTP_400_BAD_REQUEST)
+                    "error": f"Failed to fetch historical data: {str(api_error)}",
+                    "symbol": symbol
+                }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
         except Exception as e:
             return Response({
-                "error": f"An unexpected error occurred: {str(e)}"
+                "error": f"An error occurred: {str(e)}"
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-        
-class TimeIntervalsView(APIView):
+
+
+class BatchMarketDataView(APIView):
     """
-    Helper view to get available time intervals for the frontend dropdown
+    View to get market data for multiple symbols at once
     """
     permission_classes = [IsAuthenticated]
 
-    def get(self, request, room_id):
+    def post(self, request, room_id):
         try:
-            # Verify room exists and user has access
             room = Room.objects.filter(id=room_id).first()
             if not room:
                 return Response({"error": "Room not found"}, status=status.HTTP_404_NOT_FOUND)
@@ -846,69 +873,37 @@ class TimeIntervalsView(APIView):
                     "error": "You are not an active participant in this room"
                 }, status=status.HTTP_403_FORBIDDEN)
 
-            # Available time intervals for frontend dropdown
-            time_intervals = [
-                {
-                    "key": "1D", 
-                    "name": "1 Day", 
-                    "description": "Intraday data with 1-minute intervals",
-                    "best_for": "Day trading, short-term analysis"
-                },
-                {
-                    "key": "1W", 
-                    "name": "1 Week", 
-                    "description": "Weekly data with 5-minute intervals",
-                    "best_for": "Weekly trend analysis"
-                },
-                {
-                    "key": "1M", 
-                    "name": "1 Month", 
-                    "description": "Monthly data with 30-minute intervals",
-                    "best_for": "Short-term trend analysis"
-                },
-                {
-                    "key": "3M", 
-                    "name": "3 Months", 
-                    "description": "Quarterly data with daily intervals",
-                    "best_for": "Medium-term analysis"
-                },
-                {
-                    "key": "6M", 
-                    "name": "6 Months", 
-                    "description": "Half-yearly data with daily intervals",
-                    "best_for": "Medium to long-term analysis"
-                },
-                {
-                    "key": "1Y", 
-                    "name": "1 Year", 
-                    "description": "Yearly data with daily intervals",
-                    "best_for": "Long-term trend analysis"
-                },
-                {
-                    "key": "YTD", 
-                    "name": "Year to Date", 
-                    "description": "From January 1st to current date",
-                    "best_for": "Current year performance"
-                },
-                {
-                    "key": "ALL", 
-                    "name": "All Time", 
-                    "description": "Maximum available historical data",
-                    "best_for": "Complete historical analysis"
-                }
-            ]
+            symbols = request.data.get('symbols', [])
+            if not symbols or not isinstance(symbols, list):
+                return Response({
+                    "error": "Symbols array is required"
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+            if len(symbols) > 50:  # Limit batch size
+                return Response({
+                    "error": "Maximum 50 symbols allowed per batch request"
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+            market_data_results = {}
+            failed_symbols = []
+
+            for symbol in symbols:
+                try:
+                    market_data = market_service.get_market_data(symbol.strip().upper())
+                    if market_data:
+                        market_data_results[symbol] = market_data
+                    else:
+                        failed_symbols.append(symbol)
+                except Exception as e:
+                    failed_symbols.append(symbol)
 
             return Response({
-                "time_intervals": time_intervals,
-                "default_interval": "1D",
-                "usage": {
-                    "endpoint": f"/api/rooms/{room_id}/historical-data/",
-                    "parameters": {
-                        "symbol": "Stock symbol (required)",
-                        "time_interval": "One of the available interval keys (optional, default: 1D)"
-                    },
-                    "example": f"/api/rooms/{room_id}/historical-data/?symbol=RELIANCE&time_interval=1W"
-                }
+                "success": True,
+                "market_data": market_data_results,
+                "failed_symbols": failed_symbols,
+                "total_requested": len(symbols),
+                "successful": len(market_data_results),
+                "failed": len(failed_symbols)
             }, status=status.HTTP_200_OK)
 
         except Exception as e:
@@ -917,9 +912,9 @@ class TimeIntervalsView(APIView):
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
-class StockLookupView(APIView):
+class PendingOrdersView(APIView):
     """
-    Helper view to verify if a stock symbol exists and get its details
+    View to get only pending orders for a user
     """
     permission_classes = [IsAuthenticated]
 
@@ -939,46 +934,380 @@ class StockLookupView(APIView):
                     "error": "You are not an active participant in this room"
                 }, status=status.HTTP_403_FORBIDDEN)
 
-            symbol = request.GET.get('symbol', '').strip()
-            if not symbol:
-                return Response({
-                    "error": "Symbol parameter is required"
-                }, status=status.HTTP_400_BAD_REQUEST)
+            # Get only pending orders
+            pending_orders = OrderBook.objects.filter(
+                user=request.user, 
+                room=room, 
+                order_status=OrderBook.PENDING
+            ).order_by('-order_timestamp')
 
-            # Look up stock in database
-            stock = Stock.objects.filter(symbol=symbol).first()
-            if stock:
-                return Response({
-                    "found": True,
-                    "symbol": stock.symbol,
-                    "company_name": stock.name_of_company,
-                    "isin": stock.isin_number,
-                    "series": stock.series,
-                    "exchange": "NSE",
-                    "type": "Regular Stock",
-                    "instrument_key": f"NSE_EQ|{stock.isin_number}"
-                }, status=status.HTTP_200_OK)
-
-            sme_stock = SMEStock.objects.filter(symbol=symbol).first()
-            if sme_stock:
-                return Response({
-                    "found": True,
-                    "symbol": sme_stock.symbol,
-                    "company_name": sme_stock.name_of_company,
-                    "isin": sme_stock.isin_number,
-                    "series": sme_stock.series,
-                    "exchange": "NSE_SME",
-                    "type": "SME Stock",
-                    "instrument_key": f"NSE_SME|{sme_stock.isin_number}"
-                }, status=status.HTTP_200_OK)
+            orders_data = []
+            for order in pending_orders:
+                orders_data.append({
+                    "id": order.id,
+                    "symbol": order.symbol,
+                    "order_type": order.order_type,
+                    "order_category": order.order_category,
+                    "quantity": order.quantity,
+                    "order_price": str(order.order_price),
+                    "order_timestamp": order.order_timestamp,
+                    "notes": order.notes
+                })
 
             return Response({
-                "found": False,
-                "symbol": symbol,
-                "message": "Stock symbol not found in our database"
-            }, status=status.HTTP_404_NOT_FOUND)
+                "room": {
+                    "id": room.id,
+                    "name": room.name
+                },
+                "pending_orders": orders_data,
+                "count": len(orders_data)
+            }, status=status.HTTP_200_OK)
 
         except Exception as e:
             return Response({
-                "error": f"An error occurred during lookup: {str(e)}"
+                "error": f"An error occurred: {str(e)}"
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class RoomStatsView(APIView):
+    """
+    View to get overall room statistics
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, room_id):
+        try:
+            room = Room.objects.filter(id=room_id).first()
+            if not room:
+                return Response({"error": "Room not found"}, status=status.HTTP_404_NOT_FOUND)
+
+            # Check if user is admin or participant
+            is_admin = request.user == room.admin
+            participant = RoomParticipant.objects.filter(
+                user=request.user, 
+                room=room, 
+                is_active=True
+            ).first()
+
+            if not is_admin and not participant:
+                return Response({
+                    "error": "You don't have access to this room"
+                }, status=status.HTTP_403_FORBIDDEN)
+
+            # Get room statistics
+            total_participants = RoomParticipant.objects.filter(room=room, is_active=True).count()
+            total_trades = Trade.objects.filter(room=room).count()
+            total_volume = Trade.objects.filter(room=room).aggregate(
+                total=Sum('total_value')
+            )['total'] or Decimal('0')
+
+            # Get most active stocks
+            popular_stocks = Trade.objects.filter(room=room).values('symbol').annotate(
+                trade_count=models.Count('id'),
+                total_volume=Sum('total_value')
+            ).order_by('-trade_count')[:10]
+
+            # Get top traders (only if admin)
+            top_traders = []
+            if is_admin:
+                leaderboard = trading_service.get_room_leaderboard(room)
+                top_traders = leaderboard[:5]  # Top 5 traders
+
+            return Response({
+                "room": {
+                    "id": room.id,
+                    "name": room.name,
+                    "is_closed": room.is_closed,
+                    "start_time": room.start_time,
+                    "end_time": room.end_time
+                },
+                "statistics": {
+                    "total_participants": total_participants,
+                    "total_trades": total_trades,
+                    "total_volume": str(total_volume),
+                    "popular_stocks": list(popular_stocks),
+                    "top_traders": top_traders if is_admin else []
+                },
+                "user_role": "admin" if is_admin else "participant"
+            }, status=status.HTTP_200_OK)
+
+        except Exception as e:
+            return Response({
+                "error": f"An error occurred: {str(e)}"
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class UserRoomsView(APIView):
+    """
+    View to get all rooms where user is a participant
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        try:
+            user = request.user
+
+            # Get rooms where user is an active participant
+            participant_rooms = RoomParticipant.objects.filter(
+                user=user, 
+                is_active=True
+            ).select_related('room').order_by('-join_time')
+
+            # Get rooms where user is admin
+            admin_rooms = Room.objects.filter(admin=user).order_by('-created_at')
+
+            rooms_data = []
+            
+            # Add participant rooms
+            for participant in participant_rooms:
+                room = participant.room
+                rooms_data.append({
+                    "id": room.id,
+                    "name": room.name,
+                    "role": "participant",
+                    "is_closed": room.is_closed,
+                    "start_time": room.start_time,
+                    "end_time": room.end_time,
+                    "join_time": participant.join_time,
+                    "admin": room.admin.username
+                })
+
+            # Add admin rooms (avoid duplicates)
+            participant_room_ids = {p.room.id for p in participant_rooms}
+            for room in admin_rooms:
+                if room.id not in participant_room_ids:
+                    rooms_data.append({
+                        "id": room.id,
+                        "name": room.name,
+                        "role": "admin",
+                        "is_closed": room.is_closed,
+                        "start_time": room.start_time,
+                        "end_time": room.end_time,
+                        "join_time": None,
+                        "admin": room.admin.username
+                    })
+
+            # Sort by most recent activity
+            rooms_data.sort(key=lambda x: x.get('join_time') or timezone.now(), reverse=True)
+
+            return Response({
+                "rooms": rooms_data,
+                "count": len(rooms_data)
+            }, status=status.HTTP_200_OK)
+
+        except Exception as e:
+            return Response({
+                "error": f"An error occurred: {str(e)}"
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class PlaceLimitOrderView(APIView):
+    """
+    View to place limit orders (not executed immediately)
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, room_id):
+        try:
+            user = request.user
+            data = request.data
+
+            room = Room.objects.filter(id=room_id).first()
+            if not room:
+                return Response({"error": "Room not found"}, status=status.HTTP_404_NOT_FOUND)
+
+            now = timezone.now()
+            check_and_close_room(room)
+            if room.is_closed:
+                return Response({"error": "Room is closed, no more trades allowed"}, status=403)
+
+            if not (room.start_time and room.end_time and room.start_time <= now <= room.end_time):
+                return Response({"error": "Room is not active yet"}, status=403)
+
+            participant = RoomParticipant.objects.filter(user=user, room=room, is_active=True).first()
+            if not participant:
+                return Response({"error": "You are not an active participant in this room"}, status=status.HTTP_403_FORBIDDEN)
+
+            # Extract order data
+            symbol = data.get("symbol")
+            quantity = int(data.get("quantity", 0))
+            price_per_stock = Decimal(data.get("price_per_stock", 0))
+            order_type = data.get("order_type", "").upper()
+
+            if not symbol or quantity <= 0 or price_per_stock <= 0:
+                return Response({"error": "Invalid input"}, status=status.HTTP_400_BAD_REQUEST)
+
+            if order_type not in [OrderBook.BUY, OrderBook.SELL]:
+                return Response({"error": "Invalid order type"}, status=status.HTTP_400_BAD_REQUEST)
+
+            # Prepare order data for trading service
+            order_data = {
+                'order_type': order_type,
+                'symbol': symbol,
+                'quantity': quantity,
+                'order_price': price_per_stock,
+                'order_category': OrderBook.LIMIT,  # Limit order
+            }
+
+            # Use trading service to place the order
+            success, message, order = trading_service.place_order(user, room, order_data)
+
+            if success:
+                return Response({
+                    "message": message,
+                    "order_id": order.id if order else None,
+                    "order_status": "pending"
+                }, status=status.HTTP_201_CREATED)
+            else:
+                return Response({"error": message}, status=status.HTTP_400_BAD_REQUEST)
+
+        except ValueError as e:
+            return Response({"error": f"Invalid data format: {str(e)}"}, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class MarketStatusView(APIView):
+    """
+    View to get general market status and trading hours
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        try:
+            now = timezone.now()
+            
+            # Basic market hours (you can customize this based on your requirements)
+            market_open_time = now.replace(hour=9, minute=15, second=0, microsecond=0)
+            market_close_time = now.replace(hour=15, minute=30, second=0, microsecond=0)
+            
+            is_market_open = market_open_time <= now <= market_close_time
+            is_weekend = now.weekday() >= 5  # Saturday = 5, Sunday = 6
+            
+            # You can add more sophisticated market holiday checking here
+            market_status = {
+                "is_open": is_market_open and not is_weekend,
+                "current_time": now,
+                "market_open_time": market_open_time,
+                "market_close_time": market_close_time,
+                "is_weekend": is_weekend,
+                "next_open": market_open_time if now < market_open_time else market_open_time + timezone.timedelta(days=1),
+                "status_message": self._get_market_status_message(is_market_open, is_weekend, now, market_open_time, market_close_time)
+            }
+
+            return Response(market_status, status=status.HTTP_200_OK)
+
+        except Exception as e:
+            return Response({
+                "error": f"An error occurred: {str(e)}"
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    def _get_market_status_message(self, is_market_open, is_weekend, now, market_open, market_close):
+        """Helper method to generate market status message"""
+        if is_weekend:
+            return "Markets are closed (Weekend)"
+        elif now < market_open:
+            return f"Markets will open at {market_open.strftime('%H:%M')}"
+        elif now > market_close:
+            return f"Markets closed at {market_close.strftime('%H:%M')}"
+        elif is_market_open:
+            return "Markets are open"
+        else:
+            return "Markets are closed"
+
+
+class BulkCancelOrdersView(APIView):
+    """
+    View to cancel multiple pending orders at once
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, room_id):
+        try:
+            room = Room.objects.filter(id=room_id).first()
+            if not room:
+                return Response({"error": "Room not found"}, status=status.HTTP_404_NOT_FOUND)
+
+            participant = RoomParticipant.objects.filter(
+                user=request.user, 
+                room=room, 
+                is_active=True
+            ).first()
+            if not participant:
+                return Response({
+                    "error": "You are not an active participant in this room"
+                }, status=status.HTTP_403_FORBIDDEN)
+
+            order_ids = request.data.get('order_ids', [])
+            if not order_ids or not isinstance(order_ids, list):
+                return Response({
+                    "error": "order_ids array is required"
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+            if len(order_ids) > 20:  # Limit bulk operations
+                return Response({
+                    "error": "Maximum 20 orders can be cancelled at once"
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+            reason = request.data.get('reason', 'Bulk cancellation')
+            
+            cancelled_orders = []
+            failed_orders = []
+
+            for order_id in order_ids:
+                try:
+                    order = OrderBook.objects.get(id=order_id, user=request.user, room=room)
+                    success, message = trading_service.cancel_order(order, reason)
+                    
+                    if success:
+                        cancelled_orders.append({
+                            "order_id": order_id,
+                            "symbol": order.symbol,
+                            "status": "cancelled"
+                        })
+                    else:
+                        failed_orders.append({
+                            "order_id": order_id,
+                            "error": message
+                        })
+                        
+                except OrderBook.DoesNotExist:
+                    failed_orders.append({
+                        "order_id": order_id,
+                        "error": "Order not found"
+                    })
+                except Exception as e:
+                    failed_orders.append({
+                        "order_id": order_id,
+                        "error": str(e)
+                    })
+
+            return Response({
+                "message": f"Processed {len(order_ids)} orders",
+                "cancelled": cancelled_orders,
+                "failed": failed_orders,
+                "cancelled_count": len(cancelled_orders),
+                "failed_count": len(failed_orders)
+            }, status=status.HTTP_200_OK)
+
+        except Exception as e:
+            return Response({
+                "error": f"An error occurred: {str(e)}"
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+# Additional utility views can be added here as needed
+class HealthCheckView(APIView):
+    """
+    Simple health check endpoint
+    """
+    def get(self, request):
+        return Response({
+            "status": "healthy",
+            "timestamp": timezone.now(),
+            "services": {
+                "market_data": "operational",
+                "trading": "operational",
+                "database": "operational"
+            }
+        }, status=status.HTTP_200_OK)

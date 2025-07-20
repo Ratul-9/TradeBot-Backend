@@ -16,29 +16,60 @@ from .views import (
     LiveRoomView,
     StockSearchView,
     HistoricalDataView,
-    TimeIntervalsView,
-    StockLookupView
+    MarketDataView,
+    UserPortfolioView,
+    OrderHistoryView,
+    CancelOrderView,
+    BatchMarketDataView,
+    PendingOrdersView,
+    RoomStatsView,
+    UserRoomsView,
+    PlaceLimitOrderView,
+    MarketStatusView,
+    BulkCancelOrdersView,
+    HealthCheckView,
 )
 
-
 urlpatterns = [
+    # Room management
     path('create/', CreateRoomView.as_view(), name='create-room'),
     path('<int:room_id>/join/', JoinRoomView.as_view(), name='join-room'),
     path('<int:room_id>/leave/', LeaveRoomView.as_view(), name='leave-room'),
     path('<int:room_id>/details/', RoomDetailView.as_view(), name='room-details'),
-    path('<int:room_id>/buy/', RoomTradeBuyView.as_view(), name='Buy'),
-    path('<int:room_id>/sell/', RoomTradeSellView.as_view(), name='Sell'),
-    path('<int:room_id>/leaderboard/', RoomLeaderboardView.as_view(), name='leaderboard'),
-    path('<int:room_id>/tradehistory/', RoomTradeHistoryView.as_view(), name='Trade-Record'),
-    path('<int:room_id>/status/', LiveRoomView.as_view(), name='status'),
-    path('<int:room_id>/user-details/<int:user_id>/', AdminUserRoomDetailsView.as_view(), name='admin-user-room-details'),
-    path('users/me/', UserMeView.as_view(), name='user-me'),
     path('<int:room_id>/close/', RoomCloseView.as_view(), name='close-room'),
+    path('<int:room_id>/status/', LiveRoomView.as_view(), name='status'),
+    path('<int:room_id>/participants/', ParticipantView.as_view(), name='participants'),
+    path('<int:room_id>/stats/', RoomStatsView.as_view(), name='room-stats'),
     path('by-name/<str:room_name>/', RoomByNameView.as_view(), name='room-by-name'),
-    path('<int:room_id>/participants/', ParticipantView.as_view(), name='Participants'),
-    path('<int:room_id>/search/', StockSearchView.as_view(), name='Search Stock'),
-    path('rooms/<int:room_id>/historical-data/', HistoricalDataView.as_view(), name='historical-data'),
-    path('rooms/<int:room_id>/time-intervals/', TimeIntervalsView.as_view(), name='time-intervals'),
-    path('rooms/<int:room_id>/stock-lookup/', StockLookupView.as_view(), name='stock-lookup'),
-
+    
+    # Trading operations
+    path('<int:room_id>/buy/', RoomTradeBuyView.as_view(), name='buy'),
+    path('<int:room_id>/sell/', RoomTradeSellView.as_view(), name='sell'),
+    path('<int:room_id>/limit-order/', PlaceLimitOrderView.as_view(), name='place-limit-order'),
+    path('<int:room_id>/leaderboard/', RoomLeaderboardView.as_view(), name='leaderboard'),
+    path('<int:room_id>/tradehistory/', RoomTradeHistoryView.as_view(), name='trade-record'),
+    
+    # Portfolio and orders
+    path('<int:room_id>/portfolio/', UserPortfolioView.as_view(), name='user-portfolio'),
+    path('<int:room_id>/orders/', OrderHistoryView.as_view(), name='order-history'),
+    path('<int:room_id>/pending-orders/', PendingOrdersView.as_view(), name='pending-orders'),
+    path('<int:room_id>/orders/<int:order_id>/cancel/', CancelOrderView.as_view(), name='cancel-order'),
+    path('<int:room_id>/orders/bulk-cancel/', BulkCancelOrdersView.as_view(), name='bulk-cancel-orders'),
+    
+    # Market data
+    path('<int:room_id>/market-data/', MarketDataView.as_view(), name='market-data'),
+    path('<int:room_id>/batch-market-data/', BatchMarketDataView.as_view(), name='batch-market-data'),
+    path('<int:room_id>/historical-data/', HistoricalDataView.as_view(), name='historical-data'),
+    path('market-status/', MarketStatusView.as_view(), name='market-status'),
+    
+    # Stock search and lookup
+    path('<int:room_id>/search/', StockSearchView.as_view(), name='search-stock'),
+    
+    # User management
+    path('users/me/', UserMeView.as_view(), name='user-me'),
+    path('users/rooms/', UserRoomsView.as_view(), name='user-rooms'),
+    path('<int:room_id>/user-details/<int:user_id>/', AdminUserRoomDetailsView.as_view(), name='admin-user-room-details'),
+    
+    # Utility endpoints
+    path('health/', HealthCheckView.as_view(), name='health-check'),
 ]
