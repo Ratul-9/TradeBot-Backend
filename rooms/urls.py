@@ -14,7 +14,10 @@ from .views import (
     RoomByNameView,
     ParticipantView,
     LiveRoomView,
-    StockSearchView
+    StockSearchView,
+    HistoricalDataView,
+    TimeIntervalsView,
+    StockLookupView
 )
 
 
@@ -33,6 +36,9 @@ urlpatterns = [
     path('<int:room_id>/close/', RoomCloseView.as_view(), name='close-room'),
     path('by-name/<str:room_name>/', RoomByNameView.as_view(), name='room-by-name'),
     path('<int:room_id>/participants/', ParticipantView.as_view(), name='Participants'),
-    path('<int:room_id>/search/', StockSearchView.as_view(), name='Search Stock')
+    path('<int:room_id>/search/', StockSearchView.as_view(), name='Search Stock'),
+    path('rooms/<int:room_id>/historical-data/', HistoricalDataView.as_view(), name='historical-data'),
+    path('rooms/<int:room_id>/time-intervals/', TimeIntervalsView.as_view(), name='time-intervals'),
+    path('rooms/<int:room_id>/stock-lookup/', StockLookupView.as_view(), name='stock-lookup'),
 
 ]

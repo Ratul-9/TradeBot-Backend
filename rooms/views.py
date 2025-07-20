@@ -614,3 +614,369 @@ class StockSearchView(APIView):
             return Response({
                 'error': f'An error occurred while searching: {str(e)}'
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+class HistoricalDataView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, room_id):
+        try:
+            # Verify room exists and user has access
+            room = Room.objects.filter(id=room_id).first()
+            if not room:
+                return Response({"error": "Room not found"}, status=status.HTTP_404_NOT_FOUND)
+
+            # Check if user is active participant in the room
+            participant = RoomParticipant.objects.filter(
+                user=request.user, 
+                room=room, 
+                is_active=True
+            ).first()
+            if not participant:
+                return Response({
+                    "error": "You are not an active participant in this room"
+                }, status=status.HTTP_403_FORBIDDEN)
+
+            # Get query parameters
+            symbol = request.GET.get('symbol', '').strip()
+            time_interval = request.GET.get('time_interval', '1D')  # Default to 1 Day
+
+            # Validate required parameters
+            if not symbol:
+                return Response({
+                    "error": "Symbol parameter is required"
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+            # Look up ISIN number from database based on symbol
+            try:
+                # First try to find in regular stocks
+                stock = Stock.objects.filter(symbol=symbol).first()
+                if stock:
+                    isin = stock.isin_number
+                    exchange = "NSE_EQ"  # Regular NSE stock
+                else:
+                    # Try SME stocks
+                    sme_stock = SMEStock.objects.filter(symbol=symbol).first()
+                    if sme_stock:
+                        isin = sme_stock.isin_number
+                        exchange = "NSE_SME"  # SME stock
+                    else:
+                        return Response({
+                            "error": f"Stock symbol '{symbol}' not found in database"
+                        }, status=status.HTTP_404_NOT_FOUND)
+
+                # Create instrument key in Upstox format
+                instrument_key = f"{exchange}|{isin}"
+
+            except Exception as e:
+                return Response({
+                    "error": f"Error looking up stock information: {str(e)}"
+                }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+            # Define time interval mappings
+            time_interval_mapping = {
+                '1D': {'days': 1, 'name': '1 Day', 'interval': 'minute', 'interval_value': '1'},
+                '1W': {'days': 7, 'name': '1 Week', 'interval': 'minute', 'interval_value': '5'},
+                '1M': {'days': 30, 'name': '1 Month', 'interval': 'minute', 'interval_value': '30'},
+                '3M': {'days': 90, 'name': '3 Months', 'interval': 'day', 'interval_value': '1'},
+                '6M': {'days': 180, 'name': '6 Months', 'interval': 'day', 'interval_value': '1'},
+                '1Y': {'days': 365, 'name': '1 Year', 'interval': 'day', 'interval_value': '1'},
+                'YTD': {'ytd': True, 'name': 'Year to Date', 'interval': 'day', 'interval_value': '1'},
+                'ALL': {'days': 365 * 2, 'name': 'All Time (2 Years)', 'interval': 'day', 'interval_value': '1'}
+            }
+
+            # Validate time interval
+            if time_interval not in time_interval_mapping:
+                return Response({
+                    "error": f"Invalid time_interval. Available options: {', '.join(time_interval_mapping.keys())}",
+                    "available_intervals": [
+                        {"key": k, "name": v["name"]} for k, v in time_interval_mapping.items()
+                    ]
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+            # Calculate date range based on selected time interval
+            from datetime import datetime, timedelta
+            
+            now = timezone.now()
+            
+            if time_interval == 'YTD':
+                # Year to Date
+                from_date = datetime(now.year, 1, 1).strftime('%Y-%m-%d')
+                to_date = now.strftime('%Y-%m-%d')
+            else:
+                # Calculate from current date backwards
+                days_back = time_interval_mapping[time_interval]['days']
+                from_datetime = now - timedelta(days=days_back)
+                from_date = from_datetime.strftime('%Y-%m-%d')
+                to_date = now.strftime('%Y-%m-%d')
+
+            # Get interval details for this time period
+            interval_type = time_interval_mapping[time_interval]['interval']
+            interval_value = time_interval_mapping[time_interval]['interval_value']
+
+            # Configure Upstox client
+            try:
+                # Initialize the History V3 API
+                apiInstance = upstox_client.HistoryV3Api()
+                
+                # Make API call using V3 format
+                # Format: get_historical_candle_data1(instrument_key, interval, interval_value, to_date, from_date)
+                response = apiInstance.get_historical_candle_data1(
+                    instrument_key, 
+                    interval_type, 
+                    interval_value, 
+                    to_date, 
+                    from_date
+                )
+
+                # Process the response
+                if response and hasattr(response, 'data') and response.data:
+                    candles_data = response.data.get('candles', [])
+                    
+                    # Format the data for frontend consumption
+                    formatted_data = []
+                    for candle in candles_data:
+                        if len(candle) >= 5:  # Ensure we have all required data
+                            formatted_data.append({
+                                'timestamp': candle[0],  # Unix timestamp
+                                'datetime': datetime.fromtimestamp(candle[0]/1000).strftime('%Y-%m-%d %H:%M:%S') if candle[0] else None,
+                                'open': float(candle[1]),
+                                'high': float(candle[2]),
+                                'low': float(candle[3]),
+                                'close': float(candle[4]),
+                                'volume': int(candle[5]) if len(candle) > 5 else 0
+                            })
+
+                    # Calculate basic statistics for the chart
+                    statistics = {}
+                    if formatted_data:
+                        prices = [candle['close'] for candle in formatted_data]
+                        first_price = formatted_data[0]['open']
+                        last_price = formatted_data[-1]['close']
+                        
+                        statistics = {
+                            'symbol': symbol,
+                            'current_price': last_price,
+                            'opening_price': first_price,
+                            'highest_price': max(prices),
+                            'lowest_price': min(prices),
+                            'price_change': round(last_price - first_price, 2),
+                            'price_change_percent': round(
+                                ((last_price - first_price) / first_price) * 100, 2
+                            ) if first_price > 0 else 0,
+                            'total_volume': sum(candle['volume'] for candle in formatted_data),
+                            'total_trades': len(formatted_data)
+                        }
+
+                    return Response({
+                        "success": True,
+                        "symbol": symbol,
+                        "instrument_key": instrument_key,
+                        "exchange": exchange,
+                        "time_interval": time_interval,
+                        "time_interval_name": time_interval_mapping[time_interval]['name'],
+                        "interval_type": interval_type,
+                        "interval_value": interval_value,
+                        "from_date": from_date,
+                        "to_date": to_date,
+                        "data_points": len(formatted_data),
+                        "statistics": statistics,
+                        "chart_data": formatted_data  
+                    }, status=status.HTTP_200_OK)
+
+                else:
+                    return Response({
+                        "error": "No historical data found for the given parameters",
+                        "symbol": symbol,
+                        "instrument_key": instrument_key,
+                        "time_interval": time_interval,
+                        "suggestions": [
+                            "Try a different time interval",
+                            "Check if the stock was actively traded during this period",
+                            "Verify the stock symbol is correct"
+                        ]
+                    }, status=status.HTTP_404_NOT_FOUND)
+
+            except Exception as e:
+                error_message = f"Upstox API Error: {str(e)}"
+                
+                # Handle specific Upstox API errors
+                if "ApiException" in str(type(e)):
+                    try:
+                        import json
+                        if hasattr(e, 'body') and e.body:
+                            error_data = json.loads(e.body)
+                            error_message = error_data.get('message', error_message)
+                    except:
+                        pass
+
+                return Response({
+                    "error": error_message,
+                    "symbol": symbol,
+                    "instrument_key": instrument_key if 'instrument_key' in locals() else None,
+                    "time_interval": time_interval
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+        except Exception as e:
+            return Response({
+                "error": f"An unexpected error occurred: {str(e)}"
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        
+class TimeIntervalsView(APIView):
+    """
+    Helper view to get available time intervals for the frontend dropdown
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, room_id):
+        try:
+            # Verify room exists and user has access
+            room = Room.objects.filter(id=room_id).first()
+            if not room:
+                return Response({"error": "Room not found"}, status=status.HTTP_404_NOT_FOUND)
+
+            participant = RoomParticipant.objects.filter(
+                user=request.user, 
+                room=room, 
+                is_active=True
+            ).first()
+            if not participant:
+                return Response({
+                    "error": "You are not an active participant in this room"
+                }, status=status.HTTP_403_FORBIDDEN)
+
+            # Available time intervals for frontend dropdown
+            time_intervals = [
+                {
+                    "key": "1D", 
+                    "name": "1 Day", 
+                    "description": "Intraday data with 1-minute intervals",
+                    "best_for": "Day trading, short-term analysis"
+                },
+                {
+                    "key": "1W", 
+                    "name": "1 Week", 
+                    "description": "Weekly data with 5-minute intervals",
+                    "best_for": "Weekly trend analysis"
+                },
+                {
+                    "key": "1M", 
+                    "name": "1 Month", 
+                    "description": "Monthly data with 30-minute intervals",
+                    "best_for": "Short-term trend analysis"
+                },
+                {
+                    "key": "3M", 
+                    "name": "3 Months", 
+                    "description": "Quarterly data with daily intervals",
+                    "best_for": "Medium-term analysis"
+                },
+                {
+                    "key": "6M", 
+                    "name": "6 Months", 
+                    "description": "Half-yearly data with daily intervals",
+                    "best_for": "Medium to long-term analysis"
+                },
+                {
+                    "key": "1Y", 
+                    "name": "1 Year", 
+                    "description": "Yearly data with daily intervals",
+                    "best_for": "Long-term trend analysis"
+                },
+                {
+                    "key": "YTD", 
+                    "name": "Year to Date", 
+                    "description": "From January 1st to current date",
+                    "best_for": "Current year performance"
+                },
+                {
+                    "key": "ALL", 
+                    "name": "All Time", 
+                    "description": "Maximum available historical data",
+                    "best_for": "Complete historical analysis"
+                }
+            ]
+
+            return Response({
+                "time_intervals": time_intervals,
+                "default_interval": "1D",
+                "usage": {
+                    "endpoint": f"/api/rooms/{room_id}/historical-data/",
+                    "parameters": {
+                        "symbol": "Stock symbol (required)",
+                        "time_interval": "One of the available interval keys (optional, default: 1D)"
+                    },
+                    "example": f"/api/rooms/{room_id}/historical-data/?symbol=RELIANCE&time_interval=1W"
+                }
+            }, status=status.HTTP_200_OK)
+
+        except Exception as e:
+            return Response({
+                "error": f"An error occurred: {str(e)}"
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class StockLookupView(APIView):
+    """
+    Helper view to verify if a stock symbol exists and get its details
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, room_id):
+        try:
+            room = Room.objects.filter(id=room_id).first()
+            if not room:
+                return Response({"error": "Room not found"}, status=status.HTTP_404_NOT_FOUND)
+
+            participant = RoomParticipant.objects.filter(
+                user=request.user, 
+                room=room, 
+                is_active=True
+            ).first()
+            if not participant:
+                return Response({
+                    "error": "You are not an active participant in this room"
+                }, status=status.HTTP_403_FORBIDDEN)
+
+            symbol = request.GET.get('symbol', '').strip()
+            if not symbol:
+                return Response({
+                    "error": "Symbol parameter is required"
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+            # Look up stock in database
+            stock = Stock.objects.filter(symbol=symbol).first()
+            if stock:
+                return Response({
+                    "found": True,
+                    "symbol": stock.symbol,
+                    "company_name": stock.name_of_company,
+                    "isin": stock.isin_number,
+                    "series": stock.series,
+                    "exchange": "NSE",
+                    "type": "Regular Stock",
+                    "instrument_key": f"NSE_EQ|{stock.isin_number}"
+                }, status=status.HTTP_200_OK)
+
+            sme_stock = SMEStock.objects.filter(symbol=symbol).first()
+            if sme_stock:
+                return Response({
+                    "found": True,
+                    "symbol": sme_stock.symbol,
+                    "company_name": sme_stock.name_of_company,
+                    "isin": sme_stock.isin_number,
+                    "series": sme_stock.series,
+                    "exchange": "NSE_SME",
+                    "type": "SME Stock",
+                    "instrument_key": f"NSE_SME|{sme_stock.isin_number}"
+                }, status=status.HTTP_200_OK)
+
+            return Response({
+                "found": False,
+                "symbol": symbol,
+                "message": "Stock symbol not found in our database"
+            }, status=status.HTTP_404_NOT_FOUND)
+
+        except Exception as e:
+            return Response({
+                "error": f"An error occurred during lookup: {str(e)}"
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
