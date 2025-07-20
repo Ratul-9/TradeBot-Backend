@@ -551,7 +551,7 @@ class RoomByNameView(APIView):
 class StockSearchView(APIView):
     permission_classes = [IsAuthenticated]
 
-    def get(self, request):
+    def get(self, request, room_id):
         try:
             search_query = request.GET.get('q', '').strip().upper()
             limit = min(int(request.GET.get('limit', 20)), 100)
