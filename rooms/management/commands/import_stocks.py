@@ -78,14 +78,14 @@ class Command(BaseCommand):
             with transaction.atomic():
                 for row_num, row in enumerate(reader, start=1):
                     try:
-                        # Clean and prepare data - handle different column name cases
-                        symbol = self.get_field_value(row, ['Symbol', 'SYMBOL', 'symbol']).strip()
-                        name_of_company = self.get_field_value(row, ['Name of Company', 'NAME OF COMPANY', 'name_of_company']).strip()
-                        series = self.get_field_value(row, ['Series', 'SERIES', 'series']).strip()
-                        date_of_listing = self.parse_date(self.get_field_value(row, ['Date of Listing', 'DATE OF LISTING', 'date_of_listing']))
-                        paid_up_value = self.parse_decimal(self.get_field_value(row, ['Paid Up Value', 'PAID UP VALUE', 'paid_up_value'], '0'))
-                        isin_number = self.get_field_value(row, ['ISIN Number', 'ISIN NUMBER', 'isin_number']).strip()
-                        face_value = self.parse_decimal(self.get_field_value(row, ['Face Value', 'FACE VALUE', 'face_value'], '0'))
+                        # Clean and prepare data
+                        symbol = row.get('Symbol', '').strip()
+                        name_of_company = row.get('Name of Company', '').strip()
+                        series = row.get('Series', '').strip()
+                        date_of_listing = self.parse_date(row.get('Date of Listing', ''))
+                        paid_up_value = self.parse_decimal(row.get('Paid Up Value', '0'))
+                        isin_number = row.get('ISIN Number', '').strip()
+                        face_value = self.parse_decimal(row.get('Face Value', '0'))
 
                         # Debug: Print the first few rows to understand the data
                         if row_num <= 3:
