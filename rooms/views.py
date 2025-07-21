@@ -556,11 +556,76 @@ class StockSearchView(APIView):
 
 class MarketDataView(APIView):
     """
-    View to get current LTP for a stock
+    View to get current LTP for a stock using Upstox SDK directly
     """
     permission_classes = [IsAuthenticated]
 
+    def get_instrument_key(self, symbol):
+        """
+        Helper method to get instrument key for a symbol
+        You'll need to implement this based on your Stock/SMEStock models
+        """
+        try:
+            # Check in Stock model first
+            stock = Stock.objects.filter(symbol=symbol).first()
+            if stock and hasattr(stock, 'instrument_key'):
+                return stock.instrument_key
+            
+            # Check in SMEStock model
+            sme_stock = SMEStock.objects.filter(symbol=symbol).first()
+            if sme_stock and hasattr(sme_stock, 'instrument_key'):
+                return sme_stock.instrument_key
+            
+            # If no instrument_key field exists, you might need to construct it
+            # Example: NSE_EQ|INE848E01016 format
+            # This is just an example - adjust based on your data structure
+            if stock:
+                return f"NSE_EQ|{stock.isin}" if hasattr(stock, 'isin') else None
+            if sme_stock:
+                return f"NSE_EQ|{sme_stock.isin}" if hasattr(sme_stock, 'isin') else None
+            
+            return None
+        except Exception as e:
+            logger.error(f"Error getting instrument key for {symbol}: {e}")
+            return None
+
+    def get_upstox_candle_data(self, instrument_key):
+        """
+        Fetch intraday candle data from Upstox
+        """
+        try:
+            api_instance = upstox_client.HistoryV3Api()
+            response = api_instance.get_intra_day_candle_data(
+                instrument_key=instrument_key,
+                interval="minutes",
+                interval_type="1"
+            )
+            
+            if response and hasattr(response, 'data') and response.data:
+                # Get the latest candle data
+                candles = response.data.get('candles', [])
+                if candles:
+                    latest_candle = candles[-1]  # Get the most recent candle
+                    
+                    # Upstox candle format: [timestamp, open, high, low, close, volume]
+                    return {
+                        'timestamp': latest_candle[0],
+                        'open': float(latest_candle[1]),
+                        'high': float(latest_candle[2]),
+                        'low': float(latest_candle[3]),
+                        'close': float(latest_candle[4]),
+                        'ltp': float(latest_candle[4]),  # Close price as LTP
+                        'volume': int(latest_candle[5]) if len(latest_candle) > 5 else 0
+                    }
+            
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error fetching Upstox data for {instrument_key}: {e}")
+            return None
+
     def get(self, request, room_id):
+        symbol = None  # Initialize symbol for error handling
         try:
             room = Room.objects.filter(id=room_id).first()
             if not room:
@@ -576,7 +641,7 @@ class MarketDataView(APIView):
                     "error": "You are not an active participant in this room"
                 }, status=status.HTTP_403_FORBIDDEN)
 
-            symbol = request.GET.get('symbol', '').strip().upper()  # Convert to uppercase
+            symbol = request.GET.get('symbol', '').strip().upper()  
             if not symbol:
                 return Response({
                     "error": "Symbol parameter is required"
@@ -584,7 +649,7 @@ class MarketDataView(APIView):
 
             logger.info(f"Fetching LTP for symbol: {symbol}")
 
-            # Check if symbol exists in database first
+            # Check if stock exists in database
             stock_exists = Stock.objects.filter(symbol=symbol).exists()
             sme_exists = SMEStock.objects.filter(symbol=symbol).exists()
             
@@ -598,8 +663,21 @@ class MarketDataView(APIView):
                     }
                 }, status=status.HTTP_404_NOT_FOUND)
 
-            # Use market service to get intraday candle data
-            candle_data = market_service.get_intraday_candle_data(symbol)
+            # Get instrument key for the symbol
+            instrument_key = self.get_instrument_key(symbol)
+            if not instrument_key:
+                return Response({
+                    "error": "Instrument key not found for this symbol",
+                    "symbol": symbol,
+                    "debug": {
+                        "stock_exists": stock_exists,
+                        "sme_exists": sme_exists,
+                        "instrument_key": None
+                    }
+                }, status=status.HTTP_404_NOT_FOUND)
+
+            # Fetch candle data directly from Upstox
+            candle_data = self.get_upstox_candle_data(instrument_key)
             
             if candle_data:
                 return Response({
@@ -612,20 +690,20 @@ class MarketDataView(APIView):
                         "high": candle_data['high'],
                         "low": candle_data['low'],
                         "close": candle_data['close']
-                    }
+                    },
+                    "volume": candle_data.get('volume', 0),
+                    "instrument_key": instrument_key
                 }, status=status.HTTP_200_OK)
             else:
-                # Get more specific error information
-                instrument_key = market_service.get_instrument_key(symbol)
-                
                 return Response({
                     "error": "LTP not available for this symbol",
                     "symbol": symbol,
                     "debug": {
-                        "instrument_key_found": instrument_key is not None,
+                        "instrument_key_found": True,
                         "instrument_key": instrument_key,
                         "stock_exists": stock_exists,
-                        "sme_exists": sme_exists
+                        "sme_exists": sme_exists,
+                        "upstox_response": "No data received"
                     }
                 }, status=status.HTTP_404_NOT_FOUND)
 
@@ -633,10 +711,9 @@ class MarketDataView(APIView):
             logger.error(f"Error in MarketDataView for symbol {symbol}: {e}")
             import traceback
             logger.error(f"Full traceback: {traceback.format_exc()}")
-            
             return Response({
                 "error": f"An error occurred: {str(e)}",
-                "symbol": symbol if 'symbol' in locals() else None
+                "symbol": symbol if symbol else None
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 class UserPortfolioView(APIView):
