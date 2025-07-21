@@ -18,9 +18,10 @@ from django.db.models import Sum, F, Case, When, DecimalField
 from django.db.models import ExpressionWrapper
 from .models import Stock, SMEStock
 from django.db.models import Q
+import logging
 
 from .services import trading_service, market_service, balance_service, portfolio_service
-
+logger = logging.getLogger(__name__)
 User = get_user_model()
 
 class CreateRoomView(APIView):
@@ -575,11 +576,27 @@ class MarketDataView(APIView):
                     "error": "You are not an active participant in this room"
                 }, status=status.HTTP_403_FORBIDDEN)
 
-            symbol = request.GET.get('symbol', '').strip()
+            symbol = request.GET.get('symbol', '').strip().upper()  # Convert to uppercase
             if not symbol:
                 return Response({
                     "error": "Symbol parameter is required"
                 }, status=status.HTTP_400_BAD_REQUEST)
+
+            logger.info(f"Fetching LTP for symbol: {symbol}")
+
+            # Check if symbol exists in database first
+            stock_exists = Stock.objects.filter(symbol=symbol).exists()
+            sme_exists = SMEStock.objects.filter(symbol=symbol).exists()
+            
+            if not stock_exists and not sme_exists:
+                return Response({
+                    "error": f"Symbol '{symbol}' not found in database",
+                    "symbol": symbol,
+                    "debug": {
+                        "stock_exists": stock_exists,
+                        "sme_exists": sme_exists
+                    }
+                }, status=status.HTTP_404_NOT_FOUND)
 
             # Use market service to get intraday candle data
             candle_data = market_service.get_intraday_candle_data(symbol)
@@ -588,17 +605,38 @@ class MarketDataView(APIView):
                 return Response({
                     "success": True,
                     "symbol": symbol,
-                    "ltp": candle_data['ltp']
+                    "ltp": candle_data['ltp'],
+                    "timestamp": candle_data['timestamp'],
+                    "ohlc": {
+                        "open": candle_data['open'],
+                        "high": candle_data['high'],
+                        "low": candle_data['low'],
+                        "close": candle_data['close']
+                    }
                 }, status=status.HTTP_200_OK)
             else:
+                # Get more specific error information
+                instrument_key = market_service.get_instrument_key(symbol)
+                
                 return Response({
                     "error": "LTP not available for this symbol",
-                    "symbol": symbol
+                    "symbol": symbol,
+                    "debug": {
+                        "instrument_key_found": instrument_key is not None,
+                        "instrument_key": instrument_key,
+                        "stock_exists": stock_exists,
+                        "sme_exists": sme_exists
+                    }
                 }, status=status.HTTP_404_NOT_FOUND)
 
         except Exception as e:
+            logger.error(f"Error in MarketDataView for symbol {symbol}: {e}")
+            import traceback
+            logger.error(f"Full traceback: {traceback.format_exc()}")
+            
             return Response({
-                "error": f"An error occurred: {str(e)}"
+                "error": f"An error occurred: {str(e)}",
+                "symbol": symbol if 'symbol' in locals() else None
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 class UserPortfolioView(APIView):
