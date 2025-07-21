@@ -237,7 +237,7 @@ class ResendVerificationEmailView(APIView):
             # Generate new verification token
             uid = urlsafe_base64_encode(force_bytes(user.pk))
             token = default_token_generator.make_token(user)
-            verification_url = f"http://localhost:8000/verify-email/{uid}/{token}/"
+            verification_url = f"http://13.127.108.237/verify-email/{uid}/{token}/"
 
             # Send verification email
             send_mail(
