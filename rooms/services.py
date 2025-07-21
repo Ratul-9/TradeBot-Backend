@@ -85,10 +85,12 @@ class MarketDataService:
             logger.info(f"Fetching intraday data for {symbol}")
             
             # Fetch intraday data from Upstox API
+            from_date = (datetime.today() - timedelta(days=1)).strftime('%Y-%m-%d')
+
             response = self.intraday_api.get_intra_day_candle_data(
                 instrument_key=instrument_key,
-                interval="days",
-                from_date="1"
+                interval="1minute",
+                from_date=from_date     
             )
             
             if response and hasattr(response, 'data') and response.data.get('candles'):
