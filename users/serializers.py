@@ -59,7 +59,7 @@ class UserSerializer(serializers.ModelSerializer):
         token = default_token_generator.make_token(user)
         
         # Use settings for domain or fallback to localhost
-        domain = getattr(settings, 'FRONTEND_URL', 'http://localhost:8000')
+        domain = '13.127.108.237'
         verification_url = f"{domain}/verify-email/{uid}/{token}/"
 
         # Send verification email
