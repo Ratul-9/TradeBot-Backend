@@ -11,6 +11,7 @@ from django.utils.http import urlsafe_base64_encode, urlsafe_base64_decode
 from django.contrib.auth.tokens import default_token_generator
 from django.http import HttpResponse
 import logging
+from django.conf import settings
 from django.utils.encoding import force_bytes
 from django.core.mail import send_mail
 from users import serializers
@@ -56,6 +57,39 @@ class RegisterUserView(generics.CreateAPIView):
         serializer = self.get_serializer(data=request.data)
         if serializer.is_valid():
             user = serializer.save()
+            
+            # Generate verification token and send email
+            uid = urlsafe_base64_encode(force_bytes(user.pk))
+            token = default_token_generator.make_token(user)
+            
+            # Get domain from environment variable or use default AWS IP
+            domain = 'http://13.127.108.237'
+            verification_url = f"{domain}/verify-email/{uid}/{token}/"
+            
+            try:
+                # Send verification email
+                from_email = 'EMAIL_HOST_USER'
+                send_mail(
+                    subject="Verify your email",
+                    message=f"Hi {user.username},\n\nPlease click the following link to verify your email:\n\n{verification_url}\n\nBest regards,\nThe Team",
+                    from_email=from_email,
+                    recipient_list=[user.email],
+                    fail_silently=False,
+                )
+                logger.info(f"Verification email sent to {user.email} with URL: {verification_url}")
+            except Exception as e:
+                logger.error(f"Failed to send verification email to {user.email}: {str(e)}")
+                # Still return success but mention email issue
+                return Response({
+                    'message': 'Registration successful! There was an issue sending the verification email. Please use the resend option.',
+                    'user': {
+                        'id': user.id,
+                        'username': user.username,
+                        'email': user.email,
+                        'role': user.role
+                    }
+                }, status=status.HTTP_201_CREATED)
+            
             return Response({
                 'message': 'Registration successful! Please check your email to verify your account.',
                 'user': {
@@ -237,16 +271,22 @@ class ResendVerificationEmailView(APIView):
             # Generate new verification token
             uid = urlsafe_base64_encode(force_bytes(user.pk))
             token = default_token_generator.make_token(user)
-            verification_url = f"http://13.127.108.237/verify-email/{uid}/{token}/"
+            
+            # Get domain from environment variable or use default AWS IP
+            domain = 'http://13.127.108.237'
+            verification_url = f"{domain}/verify-email/{uid}/{token}/"
 
             # Send verification email
+            from_email = ('EMAIL_HOST_USER', 'no-reply@yourapp.com')
             send_mail(
                 subject="Verify your email - Resent",
                 message=f"Hi {user.username},\n\nHere's your new verification link:\n\n{verification_url}\n\nBest regards,\nThe Team",
-                from_email="no-reply@yourapp.com",
+                from_email=from_email,
                 recipient_list=[user.email],
                 fail_silently=False,
             )
+            
+            logger.info(f"Resent verification email to {user.email} with URL: {verification_url}")
 
             return Response({
                 'message': 'Verification email sent successfully'
