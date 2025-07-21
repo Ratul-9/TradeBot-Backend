@@ -27,6 +27,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+    
 class MarketDataService:
     """Simplified service for fetching intraday candle data with caching"""
     
@@ -85,8 +86,8 @@ class MarketDataService:
             # Fetch intraday data from Upstox API
             response = self.intraday_api.get_intra_day_candle_data(
                 instrument_key=instrument_key,
-                interval="1minute",
-                from_date="1"  # Last 1 day
+                interval="days",
+                from_date="1"
             )
             
             if response and hasattr(response, 'data') and response.data.get('candles'):
@@ -121,8 +122,8 @@ class MarketDataService:
         except Exception as e:
             logger.error(f"Error fetching intraday data for {symbol}: {e}")
             
-        return None
-
+        return None    
+    
 
 class BalanceService:
     """Service for managing user balances"""
