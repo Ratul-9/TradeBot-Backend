@@ -555,7 +555,7 @@ class StockSearchView(APIView):
 
 class MarketDataView(APIView):
     """
-    New view to get current market data for a stock
+    View to get current LTP for a stock
     """
     permission_classes = [IsAuthenticated]
 
@@ -581,18 +581,18 @@ class MarketDataView(APIView):
                     "error": "Symbol parameter is required"
                 }, status=status.HTTP_400_BAD_REQUEST)
 
-            # Use market service to get market data
-            market_data = market_service.get_market_data(symbol)
+            # Use market service to get intraday candle data
+            candle_data = market_service.get_intraday_candle_data(symbol)
             
-            if market_data:
+            if candle_data:
                 return Response({
                     "success": True,
                     "symbol": symbol,
-                    "market_data": market_data
+                    "ltp": candle_data['ltp']
                 }, status=status.HTTP_200_OK)
             else:
                 return Response({
-                    "error": "Market data not available for this symbol",
+                    "error": "LTP not available for this symbol",
                     "symbol": symbol
                 }, status=status.HTTP_404_NOT_FOUND)
 
@@ -851,65 +851,65 @@ class HistoricalDataView(APIView):
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
-class BatchMarketDataView(APIView):
-    """
-    View to get market data for multiple symbols at once
-    """
-    permission_classes = [IsAuthenticated]
+# class BatchMarketDataView(APIView):
+#     """
+#     View to get market data for multiple symbols at once
+#     """
+#     permission_classes = [IsAuthenticated]
 
-    def post(self, request, room_id):
-        try:
-            room = Room.objects.filter(id=room_id).first()
-            if not room:
-                return Response({"error": "Room not found"}, status=status.HTTP_404_NOT_FOUND)
+#     def post(self, request, room_id):
+#         try:
+#             room = Room.objects.filter(id=room_id).first()
+#             if not room:
+#                 return Response({"error": "Room not found"}, status=status.HTTP_404_NOT_FOUND)
 
-            participant = RoomParticipant.objects.filter(
-                user=request.user, 
-                room=room, 
-                is_active=True
-            ).first()
-            if not participant:
-                return Response({
-                    "error": "You are not an active participant in this room"
-                }, status=status.HTTP_403_FORBIDDEN)
+#             participant = RoomParticipant.objects.filter(
+#                 user=request.user, 
+#                 room=room, 
+#                 is_active=True
+#             ).first()
+#             if not participant:
+#                 return Response({
+#                     "error": "You are not an active participant in this room"
+#                 }, status=status.HTTP_403_FORBIDDEN)
 
-            symbols = request.data.get('symbols', [])
-            if not symbols or not isinstance(symbols, list):
-                return Response({
-                    "error": "Symbols array is required"
-                }, status=status.HTTP_400_BAD_REQUEST)
+#             symbols = request.data.get('symbols', [])
+#             if not symbols or not isinstance(symbols, list):
+#                 return Response({
+#                     "error": "Symbols array is required"
+#                 }, status=status.HTTP_400_BAD_REQUEST)
 
-            if len(symbols) > 50:  # Limit batch size
-                return Response({
-                    "error": "Maximum 50 symbols allowed per batch request"
-                }, status=status.HTTP_400_BAD_REQUEST)
+#             if len(symbols) > 50:  # Limit batch size
+#                 return Response({
+#                     "error": "Maximum 50 symbols allowed per batch request"
+#                 }, status=status.HTTP_400_BAD_REQUEST)
 
-            market_data_results = {}
-            failed_symbols = []
+#             market_data_results = {}
+#             failed_symbols = []
 
-            for symbol in symbols:
-                try:
-                    market_data = market_service.get_market_data(symbol.strip().upper())
-                    if market_data:
-                        market_data_results[symbol] = market_data
-                    else:
-                        failed_symbols.append(symbol)
-                except Exception as e:
-                    failed_symbols.append(symbol)
+#             for symbol in symbols:
+#                 try:
+#                     market_data = market_service.get_market_data(symbol.strip().upper())
+#                     if market_data:
+#                         market_data_results[symbol] = market_data
+#                     else:
+#                         failed_symbols.append(symbol)
+#                 except Exception as e:
+#                     failed_symbols.append(symbol)
 
-            return Response({
-                "success": True,
-                "market_data": market_data_results,
-                "failed_symbols": failed_symbols,
-                "total_requested": len(symbols),
-                "successful": len(market_data_results),
-                "failed": len(failed_symbols)
-            }, status=status.HTTP_200_OK)
+#             return Response({
+#                 "success": True,
+#                 "market_data": market_data_results,
+#                 "failed_symbols": failed_symbols,
+#                 "total_requested": len(symbols),
+#                 "successful": len(market_data_results),
+#                 "failed": len(failed_symbols)
+#             }, status=status.HTTP_200_OK)
 
-        except Exception as e:
-            return Response({
-                "error": f"An error occurred: {str(e)}"
-            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+#         except Exception as e:
+#             return Response({
+#                 "error": f"An error occurred: {str(e)}"
+#             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 class PendingOrdersView(APIView):

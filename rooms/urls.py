@@ -20,7 +20,7 @@ from .views import (
     UserPortfolioView,
     OrderHistoryView,
     CancelOrderView,
-    BatchMarketDataView,
+    # BatchMarketDataView,
     PendingOrdersView,
     RoomStatsView,
     UserRoomsView,
@@ -57,8 +57,8 @@ urlpatterns = [
     path('<int:room_id>/orders/bulk-cancel/', BulkCancelOrdersView.as_view(), name='bulk-cancel-orders'),
     
     # Market data
-    path('<int:room_id>/market-data/', MarketDataView.as_view(), name='market-data'),
-    path('<int:room_id>/batch-market-data/', BatchMarketDataView.as_view(), name='batch-market-data'),
+    path('<int:room_id>/latest-price/', MarketDataView.as_view(), name='market-data'),
+    # path('<int:room_id>/batch-market-data/', BatchMarketDataView.as_view(), name='batch-market-data'),
     path('<int:room_id>/historical-data/', HistoricalDataView.as_view(), name='historical-data'),
     path('market-status/', MarketStatusView.as_view(), name='market-status'),
     
