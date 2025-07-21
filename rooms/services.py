@@ -50,7 +50,7 @@ class MarketDataService:
             stock = Stock.objects.filter(symbol=symbol).first()
             if stock:
                 instrument_key = f"NSE_EQ|{stock.isin_number}"
-                cache.set(cache_key, instrument_key, self.cache_timeout * 10)  # Cache longer for instrument keys
+                cache.set(cache_key, instrument_key, self.cache_timeout * 10)
                 return instrument_key
             
             # Try SME stock
