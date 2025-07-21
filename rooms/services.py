@@ -6,6 +6,7 @@ from .models import (
     MarketData, Stock, SMEStock, OrderBook, UserPortfolio, 
     UserBalance, Trade, Room, TradingSession
 )
+from rest_framework.response import Response
 import logging
 from django.core.cache import cache
 from django.db import transaction
@@ -79,7 +80,7 @@ class MarketDataService:
             instrument_key = self.get_instrument_key(symbol)
             if not instrument_key:
                 logger.warning(f"No instrument key found for symbol: {symbol}")
-                return None
+                return Response({"Instrument Key Not Found"})
             
             logger.info(f"Fetching intraday data for {symbol}")
             
