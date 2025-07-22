@@ -3,11 +3,13 @@ import upstox_client
 import requests
 from django.utils import timezone
 from rest_framework.response import Response
+from upstox_client.rest import ApiException
 from rest_framework.permissions import IsAuthenticated
 from django.db import models
 from django.db.models import Sum
 from rest_framework import status
 from django.shortcuts import get_object_or_404
+from django.core.cache import cache
 from .models import Room, RoomParticipant, UserBalance, Trade, OrderBook
 from .serializers import RoomSerializer, JoinRoomSerializer, LeaveRoomSerializer, LiveRoomStatusSerializer, CloseRoomSerializer
 from django.contrib.auth import get_user_model
@@ -877,95 +879,125 @@ class CancelOrderView(APIView):
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 # Keep the existing historical data views as they are working well
+
 class HistoricalDataView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, room_id):
         try:
-            # Verify room exists and user has access
+            # Validate Room
             room = Room.objects.filter(id=room_id).first()
             if not room:
                 return Response({"error": "Room not found"}, status=status.HTTP_404_NOT_FOUND)
-            
+
+            # Validate Participant
             participant = RoomParticipant.objects.filter(
-                user=request.user, 
-                room=room, 
+                user=request.user,
+                room=room,
                 is_active=True
             ).first()
             if not participant:
-                return Response({
-                    "error": "You are not an active participant in this room"
-                }, status=status.HTTP_403_FORBIDDEN)
+                return Response({"error": "You are not an active participant in this room"}, status=status.HTTP_403_FORBIDDEN)
 
+            # Get Query Params
             symbol = request.GET.get('symbol', '').strip().upper()
             interval = request.GET.get('interval', '1minute')
             to_date = request.GET.get('to_date', timezone.now().strftime('%Y-%m-%d'))
             from_date = request.GET.get('from_date', (timezone.now() - timezone.timedelta(days=30)).strftime('%Y-%m-%d'))
 
             if not symbol:
-                return Response({
-                    "error": "Symbol parameter is required"
-                }, status=status.HTTP_400_BAD_REQUEST)
+                return Response({"error": "Symbol parameter is required"}, status=status.HTTP_400_BAD_REQUEST)
 
-            # Get instrument key for the symbol
-            # instrument_key = market_service.get_instrument_key(symbol)
-            # if not instrument_key:
+            # === Instrument Key Logic ===
+            instrument_key = self.get_instrument_key(symbol)
+            if not instrument_key:
                 return Response({
                     "error": f"Instrument key not found for symbol: {symbol}"
                 }, status=status.HTTP_404_NOT_FOUND)
 
+            # === Upstox SDK ===
+            historical_api = upstox_client.HistoryV3Api()
+
             try:
-                # Initialize Upstox API client for historical data
-                historical_api = upstox_client.HistoryApi()
-                
-                # Fetch historical data from Upstox
                 response = historical_api.get_historical_candle_data1(
-                    # instrument_key=instrument_key,
+                    instrument_key=instrument_key,
                     interval=interval,
-                    to_date=to_date,
-                    from_date=from_date
+                    from_date=from_date,
+                    to_date=to_date
                 )
 
-                if response and hasattr(response, 'data') and response.data.get('candles'):
-                    candles = response.data['candles']
-                    
-                    # Format candle data
-                    formatted_candles = []
-                    for candle in candles:
-                        if len(candle) >= 6:
-                            formatted_candles.append({
-                                'timestamp': candle[0],
-                                'open': float(candle[1]),
-                                'high': float(candle[2]),
-                                'low': float(candle[3]),
-                                'close': float(candle[4]),
-                                'volume': int(candle[5])
-                            })
-
+                candles = getattr(response, 'candles', [])
+                if not candles:
                     return Response({
-                        "symbol": symbol,
-                        "interval": interval,
-                        "from_date": from_date,
-                        "to_date": to_date,
-                        "candles": formatted_candles
-                    }, status=status.HTTP_200_OK)
-                else:
-                    return Response({
-                        "error": "No historical data available for this symbol",
+                        "error": "No historical data found for the symbol",
                         "symbol": symbol
                     }, status=status.HTTP_404_NOT_FOUND)
 
-            except Exception as api_error:
+                # Format candles
+                formatted = [
+                    {
+                        "timestamp": c[0],
+                        "open": float(c[1]),
+                        "high": float(c[2]),
+                        "low": float(c[3]),
+                        "close": float(c[4]),
+                        "volume": int(c[5])
+                    }
+                    for c in candles if len(c) >= 6
+                ]
+
                 return Response({
-                    "error": f"Failed to fetch historical data: {str(api_error)}",
+                    "symbol": symbol,
+                    "interval": interval,
+                    "from_date": from_date,
+                    "to_date": to_date,
+                    "candles": formatted
+                }, status=status.HTTP_200_OK)
+
+            except ApiException as api_error:
+                logger.error(f"Upstox API error for {symbol}: {api_error}")
+                return Response({
+                    "error": f"Upstox API error: {str(api_error)}",
                     "symbol": symbol
                 }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
         except Exception as e:
+            logger.error(f"Unexpected error in HistoricalDataView: {e}")
             return Response({
                 "error": f"An error occurred: {str(e)}"
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
+    def get_instrument_key(self, symbol: str) -> str | None:
+        """
+        Returns NSE_EQ|ISIN key using Stock or SMEStock models.
+        Caches results for better performance.
+        """
+        try:
+            cache_key = f"instrument_key_{symbol}"
+            instrument_key = cache.get(cache_key)
+
+            if instrument_key:
+                return instrument_key
+
+            # First check in Stock table
+            stock = Stock.objects.filter(symbol=symbol).first()
+            if stock and stock.isin_number:
+                instrument_key = f"NSE_EQ|{stock.isin_number}"
+                cache.set(cache_key, instrument_key, 600)  # cache for 10 minutes
+                return instrument_key
+
+            # Then check SMEStock table
+            sme_stock = SMEStock.objects.filter(symbol=symbol).first()
+            if sme_stock and sme_stock.isin_number:
+                instrument_key = f"NSE_EQ|{sme_stock.isin_number}"
+                cache.set(cache_key, instrument_key, 600)
+                return instrument_key
+
+            return None
+
+        except Exception as e:
+            logger.error(f"Error fetching instrument key for {symbol}: {e}")
+            return None
 
 # class BatchMarketDataView(APIView):
 #     """
