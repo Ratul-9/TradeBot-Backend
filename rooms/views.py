@@ -936,8 +936,8 @@ class HistoricalDataView(APIView):
             try:
                 response = historical_api.get_historical_candle_data1(
                     instrument_key,
-                    unit,
                     interval,
+                    unit,
                     from_date,
                     to_date
                 )
