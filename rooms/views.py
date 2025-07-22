@@ -15,7 +15,7 @@ from .serializers import RoomSerializer, JoinRoomSerializer, LeaveRoomSerializer
 from django.contrib.auth import get_user_model
 from rest_framework import permissions, status
 from .utils import check_and_close_room
-from transactions.models import Transaction, Portfolio, PendingOrder
+from transactions.models import Transaction, UserPortfolio, PendingOrder
 from decimal import Decimal
 from django.db.models import Sum, F, Case, When, DecimalField
 from django.db.models import ExpressionWrapper
@@ -366,62 +366,60 @@ class RoomTradeBuyView(APIView):
             # Example: deduct_balance(user, room, total_cost)
             # ========================================
 
-            # # Create the buy order
-            # order = OrderBook.objects.create(
-            #     user=user,
-            #     room=room,
-            #     order_type=OrderBook.BUY,
-            #     symbol=symbol,
-            #     quantity=quantity,
-            #     order_price=current_price,
-            #     order_category=OrderBook.MARKET,
-            #     status=OrderBook.EXECUTED,  # Market orders execute immediately
-            #     executed_quantity=quantity,
-            #     executed_price=current_price,
-            #     executed_at=timezone.now()
-            # )
+            # Create the buy order
+            order = OrderBook.objects.create(
+                user=user,
+                room=room,
+                order_type=OrderBook.BUY,
+                symbol=symbol,
+                quantity=quantity,
+                order_price=current_price,
+                order_category=OrderBook.MARKET,
+                status=OrderBook.EXECUTED,  # Market orders execute immediately
+                executed_quantity=quantity,
+                executed_price=current_price,
+                executed_at=timezone.now()
+            )
 
-            # # Update or create portfolio entry
-            # portfolio, created = Portfolio.objects.get_or_create(
-            #     user=user,
-            #     room=room,
-            #     symbol=symbol,
-            #     defaults={
-            #         'quantity': 0,
-            #         'average_price': Decimal('0'),
-            #         'total_invested': Decimal('0')
-            #     }
-            # )
-
-            # # Update portfolio with new purchase
-            # old_quantity = portfolio.quantity
-            # old_total_invested = portfolio.total_invested
-
-            # portfolio.quantity = old_quantity + quantity
-            # portfolio.total_invested = old_total_invested + total_cost
-            # portfolio.average_price = portfolio.total_invested / portfolio.quantity
-            # portfolio.save()
-
-            # # Create transaction record
-            # transaction = Transaction.objects.create(
-            #     user=user,
-            #     room=room,
-            #     order=order,
-            #     transaction_type=Transaction.BUY,
-            #     symbol=symbol,
-            #     quantity=quantity,
-            #     price=current_price,
-            #     total_amount=total_cost
-            # )
+            # Update or create portfolio entry
+            portfolio, created = UserPortfolio.objects.get_or_create(
+                user=user,
+                room=room,
+                symbol=symbol,
+                defaults={
+                    'quantity': 0,
+                    'average_price': Decimal('0'),
+                    'total_invested': Decimal('0')
+                }
+            )
+            portfolio.add_buy_transaction(quantity, current_price, stock_name=stock_name)
+            trade = Trade.objects.create(
+                user=user,
+                room=room,
+                order=order,
+                trade_type=Trade.BUY,
+                symbol=symbol,
+                quantity=quantity,
+                price=current_price,
+                total_value=total_cost
+            )
 
             return Response({
                 "success": True,
                 "message": "Buy order executed successfully",
+                "order_id": order.id,
+                "trade_id": trade.id,
                 "symbol": symbol,
                 "quantity": quantity,
                 "executed_price": float(current_price),
                 "total_cost": float(total_cost),
-                "remaining_balance": float(available_balance - total_cost),  # This should come from actual balance after deduction
+                "remaining_balance": float(available_balance - total_cost), 
+                "portfolio": {
+                    "total_quantity": portfolio.total_quantity,
+                    "average_price": float(portfolio.average_buy_price),
+                    "total_invested": float(portfolio.total_buy_value),
+                    "realized_pnl": float(portfolio.realized_pnl)
+                }
             }, status=status.HTTP_201_CREATED)
 
         except ValueError as e:
@@ -581,58 +579,50 @@ class RoomTradeSellView(APIView):
 
             new_balance = current_balance + total_proceeds
 
-            # # Create the sell order
-            # order = OrderBook.objects.create(
-            #     user=user,
-            #     room=room,
-            #     order_type=OrderBook.SELL,
-            #     symbol=symbol,
-            #     quantity=quantity,
-            #     order_price=current_price,
-            #     order_category=OrderBook.MARKET,
-            #     status=OrderBook.EXECUTED,  # Market orders execute immediately
-            #     executed_quantity=quantity,
-            #     executed_price=current_price,
-            #     executed_at=timezone.now()
-            # )
+            order = OrderBook.objects.create(
+                user=user,
+                room=room,
+                order_type=OrderBook.SELL,
+                symbol=symbol,
+                quantity=quantity,
+                order_price=current_price,
+                order_category=OrderBook.MARKET,
+                order_status=OrderBook.EXECUTED,
+                filled_quantity=quantity,
+                executed_price=current_price,
+                execution_timestamp=timezone.now()
+            )
 
-            # # Update portfolio
-            # portfolio = Portfolio.objects.filter(user=user, room=room, symbol=symbol).first()
-            # if portfolio:
-            #     # Calculate profit/loss
-            #     sold_value = quantity * portfolio.average_price
-            #     profit_loss = total_proceeds - sold_value
-                
-            #     # Update portfolio quantities
-            #     portfolio.quantity -= quantity
-            #     portfolio.total_invested = portfolio.quantity * portfolio.average_price
-                
-            #     if portfolio.quantity == 0:
-            #         portfolio.delete()  # Remove from portfolio if all shares sold
-            #     else:
-            #         portfolio.save()
+            if not UserPortfolio.add_sell_transaction(quantity, current_price):
+                return Response({"error": "Failed to update portfolio"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-            # # Create transaction record
-            # transaction = Transaction.objects.create(
-            #     user=user,
-            #     room=room,
-            #     order=order,
-            #     transaction_type=Transaction.SELL,
-            #     symbol=symbol,
-            #     quantity=quantity,
-            #     price=current_price,
-            #     total_amount=total_proceeds
-            # )
+            trade = Trade.objects.create(
+                user=user,
+                room=room,
+                order=order,
+                trade_type=Trade.SELL,
+                symbol=symbol,
+                quantity=quantity,
+                price=current_price,
+                total_value=total_proceeds
+            )
 
             response_data = {
                 "success": True,
                 "message": "Sell order executed successfully",
+                "order_id": order.id,
+                "trade_id": trade.id,
                 "symbol": symbol,
                 "quantity": quantity,
                 "executed_price": float(current_price),
                 "total_proceeds": float(total_proceeds),
-                "new_balance": float(new_balance),
-                "previous_balance": float(current_balance)
+                # "new_balance": float(balance.available_cash_balance),
+                # "previous_balance": float(previous_balance),
+                "portfolio": {
+                    "remaining_quantity": UserPortfolio.total_quantity,
+                    "average_price": float(UserPortfolio.average_buy_price),
+                    "realized_pnl": float(UserPortfolio.realized_pnl)
+                }
             }
 
             return Response(response_data, status=status.HTTP_201_CREATED)
