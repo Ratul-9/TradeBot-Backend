@@ -386,9 +386,9 @@ class RoomTradeBuyView(APIView):
                 room=room,
                 symbol=symbol,
                 defaults={
-                    'quantity': 0,
-                    'average_price': Decimal('0'),
-                    'total_invested': Decimal('0')
+                    'total_quantity': 0,
+                    'average_buy_price': Decimal('0'),
+                    'total_buy_value': Decimal('0')
                 }
             )
             portfolio.add_buy_transaction(quantity, current_price, stock_name=stock_name)
