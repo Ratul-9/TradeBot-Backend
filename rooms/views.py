@@ -901,12 +901,27 @@ class HistoricalDataView(APIView):
 
             # Get Query Params
             symbol = request.GET.get('symbol', '').strip().upper()
-            interval = request.GET.get('interval', '1minute')
+            raw_interval = request.GET.get('interval', '1minute')
             to_date = request.GET.get('to_date', timezone.now().strftime('%Y-%m-%d'))
             from_date = request.GET.get('from_date', (timezone.now() - timezone.timedelta(days=30)).strftime('%Y-%m-%d'))
 
             if not symbol:
                 return Response({"error": "Symbol parameter is required"}, status=status.HTTP_400_BAD_REQUEST)
+
+            interval_map = {
+                "1minute": ("minute", "1"),
+                "5minute": ("minute", "5"),
+                "15minute": ("minute", "15"),
+                "30minute": ("minute", "30"),
+                "day": ("day", "1"),
+                "month": ("month", "1")
+            }
+
+            if raw_interval not in interval_map:
+                return Response({"error": "Invalid interval"}, status=status.HTTP_400_BAD_REQUEST)
+
+            unit, interval = interval_map[raw_interval]
+
 
             # === Instrument Key Logic ===
             instrument_key = self.get_instrument_key(symbol)
@@ -920,10 +935,11 @@ class HistoricalDataView(APIView):
 
             try:
                 response = historical_api.get_historical_candle_data1(
-                    instrument_key=instrument_key,
-                    interval=interval,
-                    from_date=from_date,
-                    to_date=to_date
+                    instrument_key,
+                    unit,
+                    interval,
+                    from_date,
+                    to_date
                 )
 
                 candles = getattr(response, 'candles', [])
