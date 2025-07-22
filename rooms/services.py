@@ -29,104 +29,6 @@ import logging
 logger = logging.getLogger(__name__)
 
     
-class MarketDataService:
-    """Simplified service for fetching intraday candle data with caching"""
-    
-    def __init__(self):
-        self.intraday_api = upstox_client.HistoryV3Api()
-        self.cache_timeout = 60  # 1 minute cache
-    
-    def get_instrument_key(self, symbol: str) -> Optional[str]:
-        """Get instrument key for a given symbol"""
-        try:
-            # Check cache first
-            cache_key = f"instrument_key_{symbol}"
-            instrument_key = cache.get(cache_key)
-            
-            if instrument_key:
-                return instrument_key
-            
-            # Try regular stock first
-            stock = Stock.objects.filter(symbol=symbol).first()
-            if stock:
-                instrument_key = f"NSE_EQ|{stock.isin_number}"
-                cache.set(cache_key, instrument_key, self.cache_timeout * 10)
-                return instrument_key
-            
-            # Try SME stock
-            sme_stock = SMEStock.objects.filter(symbol=symbol).first()
-            if sme_stock:
-                instrument_key = f"NSE_EQ|{sme_stock.isin_number}"
-                cache.set(cache_key, instrument_key, self.cache_timeout * 10)
-                return instrument_key
-            
-            return None
-        except Exception as e:
-            logger.error(f"Error getting instrument key for {symbol}: {e}")
-            return None
-    
-    def get_intraday_candle_data(self, symbol: str) -> Optional[Dict]:
-        """
-        Get intraday candle data with close price as LTP
-        """
-        try:
-            # Check cache first
-            cache_key = f"intraday_data_{symbol}"
-            cached_data = cache.get(cache_key)
-            
-            if cached_data:
-                return cached_data
-            
-            instrument_key = self.get_instrument_key(symbol)
-            if not instrument_key:
-                logger.warning(f"No instrument key found for symbol: {symbol}")
-                return Response({"Instrument Key Not Found"})
-            
-            logger.info(f"Fetching intraday data for {symbol}")
-            
-            # Fetch intraday data from Upstox API
-            from_date = (datetime.today() - timedelta(days=1)).strftime('%Y-%m-%d')
-
-            response = self.intraday_api.get_intra_day_candle_data(
-                instrument_key=instrument_key,
-                interval="1minute",
-                from_date=from_date     
-            )
-            
-            if response and hasattr(response, 'data') and response.data.get('candles'):
-                candles = response.data.get('candles', [])
-                
-                if not candles:
-                    logger.warning(f"No intraday data found for {symbol}")
-                    return None
-                
-                # Get the most recent candle (first in the list)
-                latest_candle = candles[0]
-                
-                # Candle format: [timestamp, open, high, low, close, volume, oi]
-                if len(latest_candle) >= 5:
-                    candle_data = {
-                        'symbol': symbol,
-                        'timestamp': datetime.fromtimestamp(latest_candle[0] / 1000) if latest_candle[0] else datetime.now(),
-                        'open': Decimal(str(latest_candle[1])),
-                        'high': Decimal(str(latest_candle[2])),
-                        'low': Decimal(str(latest_candle[3])),
-                        'close': Decimal(str(latest_candle[4])),  # This is your LTP
-                        'volume': latest_candle[5] if len(latest_candle) > 5 else 0,
-                        'ltp': Decimal(str(latest_candle[4]))  # Close price as LTP
-                    }
-                    
-                    # Cache the data
-                    cache.set(cache_key, candle_data, self.cache_timeout)
-                    
-                    logger.info(f"Successfully fetched intraday data for {symbol}, LTP: {candle_data['ltp']}")
-                    return candle_data
-            
-        except Exception as e:
-            logger.error(f"Error fetching intraday data for {symbol}: {e}")
-            
-        return None    
-    
 
 class BalanceService:
     """Service for managing user balances"""
@@ -232,7 +134,7 @@ class TradingService:
     """Main service for handling trading operations"""
     
     def __init__(self):
-        self.market_service = MarketDataService()
+        # self.market_service = MarketDataService()
         self.balance_service = BalanceService()
         self.portfolio_service = PortfolioService()
     
@@ -485,6 +387,6 @@ class TradingService:
 
 # Service instances
 trading_service = TradingService()
-market_service = MarketDataService()
+# market_service = MarketDataService()
 balance_service = BalanceService()
 portfolio_service = PortfolioService()

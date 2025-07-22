@@ -1,5 +1,6 @@
 from rest_framework.views import APIView
 import upstox_client
+import requests
 from django.utils import timezone
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
@@ -554,74 +555,81 @@ class StockSearchView(APIView):
                 'error': f'An error occurred while searching: {str(e)}'
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-class MarketDataView(APIView):
+
+class StockDataView(APIView):
     """
-    View to get current LTP for a stock using Upstox SDK directly
+    View to get current stock data using IndianAPI
     """
     permission_classes = [IsAuthenticated]
 
-    def get_instrument_key(self, symbol):
+    def get_stock_name(self, symbol):
         """
-        Helper method to get instrument key for a symbol
-        You'll need to implement this based on your Stock/SMEStock models
+        Helper method to get company name for a symbol
+        This can be enhanced based on your Stock/SMEStock models
         """
         try:
             # Check in Stock model first
             stock = Stock.objects.filter(symbol=symbol).first()
-            if stock and hasattr(stock, 'instrument_key'):
-                return stock.instrument_key
+            if stock and hasattr(stock, 'company_name'):
+                return stock.name_of_company
             
             # Check in SMEStock model
             sme_stock = SMEStock.objects.filter(symbol=symbol).first()
-            if sme_stock and hasattr(sme_stock, 'instrument_key'):
-                return sme_stock.instrument_key
+            if sme_stock and hasattr(sme_stock, 'company_name'):
+                return sme_stock.name_of_company
             
-            # If no instrument_key field exists, you might need to construct it
-            # Example: NSE_EQ|INE848E01016 format
-            # This is just an example - adjust based on your data structure
-            if stock:
-                return f"NSE_EQ|{stock.isin}" if hasattr(stock, 'isin') else None
-            if sme_stock:
-                return f"NSE_EQ|{sme_stock.isin}" if hasattr(sme_stock, 'isin') else None
             
-            return None
+            return symbol
+            
         except Exception as e:
-            logger.error(f"Error getting instrument key for {symbol}: {e}")
-            return None
+            logger.error(f"Error getting company name for {symbol}: {e}")
+            return symbol  # Fallback to symbol
 
-    def get_upstox_candle_data(self, instrument_key):
+    def get_indianapi_stock_data(self, stock_name):
         """
-        Fetch intraday candle data from Upstox
+        Fetch stock data from IndianAPI
         """
         try:
-            api_instance = upstox_client.HistoryV3Api()
-            response = api_instance.get_intra_day_candle_data(
-                instrument_key=instrument_key,
-                interval="minutes",
-                interval_type="1"
-            )
+            base_url = "https://stock.indianapi.in/stock"
+            params = {'name': stock_name}
             
-            if response and hasattr(response, 'data') and response.data:
-                # Get the latest candle data
-                candles = response.data.get('candles', [])
-                if candles:
-                    latest_candle = candles[-1]  # Get the most recent candle
-                    
-                    # Upstox candle format: [timestamp, open, high, low, close, volume]
-                    return {
-                        'timestamp': latest_candle[0],
-                        'open': float(latest_candle[1]),
-                        'high': float(latest_candle[2]),
-                        'low': float(latest_candle[3]),
-                        'close': float(latest_candle[4]),
-                        'ltp': float(latest_candle[4]),  # Close price as LTP
-                        'volume': int(latest_candle[5]) if len(latest_candle) > 5 else 0
-                    }
+            response = requests.get(base_url, params=params, timeout=10)
+            response.raise_for_status() 
+            
+            data = response.json()
+            
+            if data and 'currentPrice' in data:
+                # Extract current price (prefer NSE, fallback to BSE)
+                current_price = data['currentPrice']
+                ltp = current_price.get('NSE') or current_price.get('BSE')
+                
+                if ltp is None:
+                    return None
+                
+                return {
+                    'company_name': data.get('companyName', ''),
+                    'industry': data.get('industry', ''),
+                    'ltp': float(ltp),
+                    'nse_price': current_price.get('NSE'),
+                    'bse_price': current_price.get('BSE'),
+                    'percent_change': data.get('percentChange'),
+                    'year_high': data.get('yearHigh'),
+                    'year_low': data.get('yearLow'),
+                    'technical_data': data.get('stockTechnicalData'),
+                    'key_metrics': data.get('keyMetrics'),
+                    'raw_data': data  # Include full response for additional data if needed
+                }
             
             return None
             
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Network error fetching IndianAPI data for {stock_name}: {e}")
+            return None
+        except ValueError as e:
+            logger.error(f"JSON parsing error for {stock_name}: {e}")
+            return None
         except Exception as e:
-            logger.error(f"Error fetching Upstox data for {instrument_key}: {e}")
+            logger.error(f"Unexpected error fetching IndianAPI data for {stock_name}: {e}")
             return None
 
     def get(self, request, room_id):
@@ -647,7 +655,7 @@ class MarketDataView(APIView):
                     "error": "Symbol parameter is required"
                 }, status=status.HTTP_400_BAD_REQUEST)
 
-            logger.info(f"Fetching LTP for symbol: {symbol}")
+            logger.info(f"Fetching stock data for symbol: {symbol}")
 
             # Check if stock exists in database
             stock_exists = Stock.objects.filter(symbol=symbol).exists()
@@ -663,59 +671,52 @@ class MarketDataView(APIView):
                     }
                 }, status=status.HTTP_404_NOT_FOUND)
 
-            # Get instrument key for the symbol
-            instrument_key = self.get_instrument_key(symbol)
-            if not instrument_key:
-                return Response({
-                    "error": "Instrument key not found for this symbol",
-                    "symbol": symbol,
-                    "debug": {
-                        "stock_exists": stock_exists,
-                        "sme_exists": sme_exists,
-                        "instrument_key": None
-                    }
-                }, status=status.HTTP_404_NOT_FOUND)
-
-            # Fetch candle data directly from Upstox
-            candle_data = self.get_upstox_candle_data(instrument_key)
+            # Get company name for the symbol
+            stock_name = self.get_stock_name(symbol)
             
-            if candle_data:
+            # Fetch stock data from IndianAPI
+            stock_data = self.get_indianapi_stock_data(stock_name)
+            
+            if stock_data:
                 return Response({
                     "success": True,
                     "symbol": symbol,
-                    "ltp": candle_data['ltp'],
-                    "timestamp": candle_data['timestamp'],
-                    "ohlc": {
-                        "open": candle_data['open'],
-                        "high": candle_data['high'],
-                        "low": candle_data['low'],
-                        "close": candle_data['close']
+                    "company_name": stock_data['company_name'],
+                    "industry": stock_data['industry'],
+                    "ltp": stock_data['ltp'],
+                    "current_price": {
+                        "NSE": stock_data['nse_price'],
+                        "BSE": stock_data['bse_price']
                     },
-                    "volume": candle_data.get('volume', 0),
-                    "instrument_key": instrument_key
+                    "percent_change": stock_data['percent_change'],
+                    "year_high": stock_data['year_high'],
+                    "year_low": stock_data['year_low'],
+                    "technical_data": stock_data['technical_data'],
+                    "key_metrics": stock_data['key_metrics'],
+                    "source": "IndianAPI"
                 }, status=status.HTTP_200_OK)
             else:
                 return Response({
-                    "error": "LTP not available for this symbol",
+                    "error": "Stock data not available for this symbol",
                     "symbol": symbol,
                     "debug": {
-                        "instrument_key_found": True,
-                        "instrument_key": instrument_key,
+                        "stock_name_used": stock_name,
                         "stock_exists": stock_exists,
                         "sme_exists": sme_exists,
-                        "upstox_response": "No data received"
+                        "indianapi_response": "No data received or invalid response"
                     }
                 }, status=status.HTTP_404_NOT_FOUND)
 
         except Exception as e:
-            logger.error(f"Error in MarketDataView for symbol {symbol}: {e}")
+            logger.error(f"Error in StockDataView for symbol {symbol}: {e}")
             import traceback
             logger.error(f"Full traceback: {traceback.format_exc()}")
             return Response({
                 "error": f"An error occurred: {str(e)}",
                 "symbol": symbol if symbol else None
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
+        
+        
 class UserPortfolioView(APIView):
     """
     New view to get user's portfolio summary
