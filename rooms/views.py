@@ -587,15 +587,14 @@ class StockDataView(APIView):
             base_url = "https://stock.indianapi.in/stock"
             params = {'name': stock_name}
             headers = {
-                "x-api-key": settings.INDIANAPI_KEY,
+                "X-Api-Key": settings.INDIANAPI_KEY,
                 "Content-Type": "application/json"
             }
 
             response = requests.get(
-                base_url, 
-                params=params, 
-                headers=headers, 
-                timeout=15
+                base_url,
+                headers=headers,  
+                params=params
             )
             response.raise_for_status()
             data = response.json()
