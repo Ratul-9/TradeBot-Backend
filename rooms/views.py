@@ -925,7 +925,7 @@ class HistoricalDataView(APIView):
 
             # === Instrument Key Logic ===
             instrument_key = self.get_instrument_key(symbol)
-            if not instrument_key:
+            if instrument_key == None:
                 return Response({
                     "error": f"Instrument key not found for symbol: {symbol}"
                 }, status=status.HTTP_404_NOT_FOUND)
