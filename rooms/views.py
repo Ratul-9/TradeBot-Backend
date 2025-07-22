@@ -942,32 +942,26 @@ class HistoricalDataView(APIView):
                     to_date="2024-06-30"
                 )
 
-                candles = getattr(response, 'candles', [])
-                if not candles:
-                    return Response({
-                        "error": "No historical data found for the symbol",
-                        "symbol": symbol
-                    }, status=status.HTTP_404_NOT_FOUND)
-
-                # Format candles
-                formatted = [
-                    {
-                        "timestamp": c[0],
-                        "open": float(c[1]),
-                        "high": float(c[2]),
-                        "low": float(c[3]),
-                        "close": float(c[4]),
-                        "volume": int(c[5])
-                    }
-                    for c in candles if len(c) >= 6
-                ]
+                if response and response.status == "success" and 'candles' in response.data:
+                    candles = response.data['candles']
+                    formatted_candles = []
+                    for candle in candles:
+                        if len(candle) >= 6:
+                            formatted_candles.append({
+                                'timestamp': candle[0],
+                                'open': float(candle[1]),
+                                'high': float(candle[2]),
+                                'low': float(candle[3]),
+                                'close': float(candle[4]),
+                                'volume': int(candle[5]),
+                            })
 
                 return Response({
                     "symbol": symbol,
                     "interval": interval,
                     "from_date": from_date,
                     "to_date": to_date,
-                    "candles": formatted
+                    "candles": formatted_candles
                 }, status=status.HTTP_200_OK)
 
             except ApiException as api_error:
