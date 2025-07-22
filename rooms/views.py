@@ -688,7 +688,8 @@ class StockDataView(APIView):
             if not stock_data:
                 return Response({
                     "error": "Unable to fetch current stock data. Please try again later.",
-                    "symbol": symbol
+                    "symbol": symbol,
+                    "Name": stock_name
                 }, status=status.HTTP_404_NOT_FOUND)
 
             # Return successful response
