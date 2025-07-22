@@ -942,8 +942,8 @@ class HistoricalDataView(APIView):
                     to_date="2024-06-30"
                 )
 
-                if response and response.status == "success" and 'candles' in response.data:
-                    candles = response.candles
+                if response and response.status == "success":
+                    candles = getattr(response, 'candles', None)
                     if not candles:
                         return Response({"error": "No historical data found for the symbol"}, status=404)
                     formatted_candles = []
