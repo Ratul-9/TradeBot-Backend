@@ -20,6 +20,7 @@ from django.db.models import ExpressionWrapper
 from .models import Stock, SMEStock
 from django.db.models import Q
 import logging
+from django.conf import settings
 
 from .services import trading_service, market_service, balance_service, portfolio_service
 logger = logging.getLogger(__name__)
@@ -563,49 +564,41 @@ class StockDataView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get_stock_name(self, symbol):
-        """
-        Helper method to get company name for a symbol
-        This can be enhanced based on your Stock/SMEStock models
-        """
         try:
-            # Check in Stock model first
             stock = Stock.objects.filter(symbol=symbol).first()
-            if stock and hasattr(stock, 'company_name'):
-                return stock.name_of_company
-            
-            # Check in SMEStock model
+            if stock and hasattr(stock, 'name_of_company'):
+                return stock.name_of_company or symbol   
+
             sme_stock = SMEStock.objects.filter(symbol=symbol).first()
-            if sme_stock and hasattr(sme_stock, 'company_name'):
-                return sme_stock.name_of_company
-            
-            
+            if sme_stock and hasattr(sme_stock, 'name_of_company'):
+                return sme_stock.name_of_company or symbol  # fallback
+
             return symbol
-            
         except Exception as e:
             logger.error(f"Error getting company name for {symbol}: {e}")
-            return symbol  # Fallback to symbol
+            return symbol
 
     def get_indianapi_stock_data(self, stock_name):
-        """
-        Fetch stock data from IndianAPI
-        """
         try:
             base_url = "https://stock.indianapi.in/stock"
-            params = {'name': stock_name}
-            
-            response = requests.get(base_url, params=params, timeout=10)
-            response.raise_for_status() 
-            
+            params = {'name': stock_name.strip()}  # clean input
+
+            headers = {
+                "x-api-key": settings.INDIANAPI_KEY  # make sure it's in your Django settings
+            }
+
+            response = requests.get(base_url, params=params, headers=headers, timeout=10)
+            response.raise_for_status()
+
             data = response.json()
-            
-            if data and 'currentPrice' in data:
-                # Extract current price (prefer NSE, fallback to BSE)
+
+            if data and isinstance(data.get('currentPrice'), dict):
                 current_price = data['currentPrice']
                 ltp = current_price.get('NSE') or current_price.get('BSE')
-                
+
                 if ltp is None:
                     return None
-                
+
                 return {
                     'company_name': data.get('companyName', ''),
                     'industry': data.get('industry', ''),
@@ -617,11 +610,11 @@ class StockDataView(APIView):
                     'year_low': data.get('yearLow'),
                     'technical_data': data.get('stockTechnicalData'),
                     'key_metrics': data.get('keyMetrics'),
-                    'raw_data': data  # Include full response for additional data if needed
+                    'raw_data': data
                 }
-            
+
             return None
-            
+
         except requests.exceptions.RequestException as e:
             logger.error(f"Network error fetching IndianAPI data for {stock_name}: {e}")
             return None
@@ -633,15 +626,15 @@ class StockDataView(APIView):
             return None
 
     def get(self, request, room_id):
-        symbol = None  # Initialize symbol for error handling
+        symbol = None
         try:
             room = Room.objects.filter(id=room_id).first()
             if not room:
                 return Response({"error": "Room not found"}, status=status.HTTP_404_NOT_FOUND)
 
             participant = RoomParticipant.objects.filter(
-                user=request.user, 
-                room=room, 
+                user=request.user,
+                room=room,
                 is_active=True
             ).first()
             if not participant:
@@ -649,18 +642,17 @@ class StockDataView(APIView):
                     "error": "You are not an active participant in this room"
                 }, status=status.HTTP_403_FORBIDDEN)
 
-            symbol = request.GET.get('symbol', '').strip().upper()  
-            if not symbol:
+            symbol = request.GET.get('symbol', '').strip().upper()
+            if not symbol or len(symbol) < 1:
                 return Response({
                     "error": "Symbol parameter is required"
                 }, status=status.HTTP_400_BAD_REQUEST)
 
             logger.info(f"Fetching stock data for symbol: {symbol}")
 
-            # Check if stock exists in database
             stock_exists = Stock.objects.filter(symbol=symbol).exists()
             sme_exists = SMEStock.objects.filter(symbol=symbol).exists()
-            
+
             if not stock_exists and not sme_exists:
                 return Response({
                     "error": f"Symbol '{symbol}' not found in database",
@@ -671,12 +663,9 @@ class StockDataView(APIView):
                     }
                 }, status=status.HTTP_404_NOT_FOUND)
 
-            # Get company name for the symbol
             stock_name = self.get_stock_name(symbol)
-            
-            # Fetch stock data from IndianAPI
             stock_data = self.get_indianapi_stock_data(stock_name)
-            
+
             if stock_data:
                 return Response({
                     "success": True,
@@ -715,8 +704,8 @@ class StockDataView(APIView):
                 "error": f"An error occurred: {str(e)}",
                 "symbol": symbol if symbol else None
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-        
-        
+
+
 class UserPortfolioView(APIView):
     """
     New view to get user's portfolio summary
