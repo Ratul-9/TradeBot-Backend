@@ -391,13 +391,15 @@ class RoomTradeBuyView(APIView):
                     'total_buy_value': Decimal('0')
                 }
             )
-            portfolio.add_buy_transaction(quantity, current_price, stock_name=stock_name)
+            portfolio.add_buy_transaction(quantity, current_price)
+            stock_name = self.get_stock_name(symbol)
             trade = Trade.objects.create(
                 user=user,
                 room=room,
                 order=order,
                 trade_type=Trade.BUY,
                 symbol=symbol,
+                stock_name=stock_name,
                 quantity=quantity,
                 price=current_price,
                 total_value=total_cost
