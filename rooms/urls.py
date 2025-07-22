@@ -40,7 +40,7 @@ urlpatterns = [
     path('<int:room_id>/status/', LiveRoomView.as_view(), name='status'),
     path('<int:room_id>/participants/', ParticipantView.as_view(), name='participants'),
     path('<int:room_id>/stats/', RoomStatsView.as_view(), name='room-stats'),
-    path('by-name/<str:room_name>/', RoomByNameView.as_view(), name='room-by-name'),
+    path('by-name/<str:room_name>/', RoomByNameView.as_view(), name='room-by-name'),   #not working
     
     # Trading operations
     path('<int:room_id>/buy/', RoomTradeBuyView.as_view(), name='buy'),
