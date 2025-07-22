@@ -412,13 +412,7 @@ class RoomTradeBuyView(APIView):
                 "quantity": quantity,
                 "executed_price": float(current_price),
                 "total_cost": float(total_cost),
-                "remaining_balance": float(available_balance - total_cost), 
-                "portfolio": {
-                    "total_quantity": portfolio.total_quantity,
-                    "average_price": float(portfolio.average_buy_price),
-                    "total_invested": float(portfolio.total_buy_value),
-                    "realized_pnl": float(portfolio.realized_pnl)
-                }
+                "remaining_balance": float(available_balance - total_cost)
             }, status=status.HTTP_201_CREATED)
 
         except ValueError as e:
