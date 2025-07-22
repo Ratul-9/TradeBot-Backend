@@ -909,12 +909,12 @@ class HistoricalDataView(APIView):
                 return Response({"error": "Symbol parameter is required"}, status=status.HTTP_400_BAD_REQUEST)
 
             interval_map = {
-                "1minute": ("minute", "1"),
-                "5minute": ("minute", "5"),
-                "15minute": ("minute", "15"),
-                "30minute": ("minute", "30"),
-                "day": ("day", "1"),
-                "month": ("month", "1")
+                "1minute": ("minutes", "1"),
+                "5minute": ("minutes", "5"),
+                "15minute": ("minutes", "15"),
+                "30minute": ("minutes", "30"),
+                "day": ("days", "1"),
+                "month": ("months", "1")
             }
 
             if raw_interval not in interval_map:
