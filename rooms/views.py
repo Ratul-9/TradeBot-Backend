@@ -600,12 +600,10 @@ class StockDataView(APIView):
             data = response.json()
 
             # Validate response structure
-            if not data or not isinstance(data, dict):
+            if not data:
                 return None
 
             current_price = data.get('currentPrice', {})
-            if not isinstance(current_price, dict):
-                return None
 
             # Get LTP from NSE or BSE
             ltp = current_price.get('NSE') or current_price.get('BSE')
