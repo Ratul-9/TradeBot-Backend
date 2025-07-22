@@ -931,7 +931,7 @@ class HistoricalDataView(APIView):
                 }, status=status.HTTP_404_NOT_FOUND)
 
             # === Upstox SDK ===
-            historical_api = upstox_client.HistoryV3Api()
+            apiInstance = upstox_client.HistoryV3Api()
 
             # return Response({
             #     "instruement_key": instrument_key,
@@ -942,7 +942,7 @@ class HistoricalDataView(APIView):
             # })
 
             try:
-                response = historical_api.get_historical_candle_data1(
+                response = apiInstance.get_historical_candle_data1(
                     instrument_key=instrument_key,
                     interval=interval,
                     unit=unit,
