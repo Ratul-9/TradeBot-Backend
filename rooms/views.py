@@ -950,7 +950,7 @@ class HistoricalDataView(APIView):
                     to_date=to_date
                 )
 
-                candles = response.data.candles
+                candles = response.data.data.candles
 
                 return Response({candles})
 
