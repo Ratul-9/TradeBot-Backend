@@ -15,7 +15,7 @@ from .serializers import RoomSerializer, JoinRoomSerializer, LeaveRoomSerializer
 from django.contrib.auth import get_user_model
 from rest_framework import permissions, status
 from .utils import check_and_close_room
-from transactions.models import Transaction, UserPortfolio, PendingOrder
+from .models import UserPortfolio
 from decimal import Decimal
 from django.db.models import Sum, F, Case, When, DecimalField
 from django.db.models import ExpressionWrapper
