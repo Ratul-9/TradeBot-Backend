@@ -945,15 +945,15 @@ class HistoricalDataView(APIView):
                 if response and response.status == "success" and 'candles' in response.data:
                     candles = response.data['candles']
                     formatted_candles = []
-                    for candle in candles:
-                        if len(candle) >= 6:
+                    for i in candles:
+                        if len(i) >= 6:
                             formatted_candles.append({
-                                'timestamp': candle[0],
-                                'open': float(candle[1]),
-                                'high': float(candle[2]),
-                                'low': float(candle[3]),
-                                'close': float(candle[4]),
-                                'volume': int(candle[5]),
+                                'timestamp': i[0],
+                                'open': float(i[1]),
+                                'high': float(i[2]),
+                                'low': float(i[3]),
+                                'close': float(i[4]),
+                                'volume': int(i[5]),
                             })
 
                 return Response({
