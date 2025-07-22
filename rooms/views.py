@@ -952,6 +952,12 @@ class HistoricalDataView(APIView):
 
                 candles = response.data.candles
 
+                if not candles:
+                    return Response({
+                        "error": "No historical data found for the symbol",
+                        "symbol": symbol
+                    }, status=404)
+
                 return Response({"candles": candles})
 
                 candles_data = getattr(response, "data", {}).get("candles", [])
