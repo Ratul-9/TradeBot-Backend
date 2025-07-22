@@ -683,7 +683,7 @@ class StockDataView(APIView):
             stock_name = self.get_stock_name(symbol)
             if not stock_name:
                 return Response({"Stock Name Not found"})
-            stock_data = self.get_indianapi_stock_data(stock_name)
+            stock_data = self.get_indianapi_stock_data(symbol)
 
             if not stock_data:
                 return Response({
