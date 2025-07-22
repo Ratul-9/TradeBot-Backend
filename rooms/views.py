@@ -399,7 +399,6 @@ class RoomTradeBuyView(APIView):
                 order=order,
                 trade_type=Trade.BUY,
                 symbol=symbol,
-                stock_name=stock_name,
                 quantity=quantity,
                 price=current_price,
                 total_value=total_cost
