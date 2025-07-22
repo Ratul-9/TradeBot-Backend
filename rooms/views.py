@@ -564,147 +564,158 @@ class StockDataView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get_stock_name(self, symbol):
+        """Get company name from symbol, fallback to symbol if not found"""
         try:
+            # Check regular stocks first
             stock = Stock.objects.filter(symbol=symbol).first()
-            if stock and hasattr(stock, 'name_of_company'):
-                return stock.name_of_company or symbol   
+            if stock and hasattr(stock, 'name_of_company') and stock.name_of_company:
+                return stock.name_of_company.strip()
 
+            # Check SME stocks
             sme_stock = SMEStock.objects.filter(symbol=symbol).first()
-            if sme_stock and hasattr(sme_stock, 'name_of_company'):
-                return sme_stock.name_of_company or symbol  # fallback
+            if sme_stock and hasattr(sme_stock, 'name_of_company') and sme_stock.name_of_company:
+                return sme_stock.name_of_company.strip()
 
+            # Fallback to symbol
             return symbol
-        except Exception as e:
-            logger.error(f"Error getting company name for {symbol}: {e}")
+        except Exception:
             return symbol
 
     def get_indianapi_stock_data(self, stock_name):
+        """Fetch stock data from IndianAPI"""
         try:
             base_url = "https://stock.indianapi.in/stock"
-            params = {'name': stock_name.strip()}  # clean input
-
+            params = {'name': stock_name}
             headers = {
-                "x-api-key": settings.INDIANAPI_KEY  # make sure it's in your Django settings
+                "x-api-key": settings.INDIANAPI_KEY,
+                "Content-Type": "application/json"
             }
 
-            response = requests.get(base_url, params=params, headers=headers, timeout=10)
+            response = requests.get(
+                base_url, 
+                params=params, 
+                headers=headers, 
+                timeout=15
+            )
             response.raise_for_status()
-
             data = response.json()
 
-            if data and isinstance(data.get('currentPrice'), dict):
-                current_price = data['currentPrice']
-                ltp = current_price.get('NSE') or current_price.get('BSE')
+            # Validate response structure
+            if not data or not isinstance(data, dict):
+                return None
 
-                if ltp is None:
-                    return None
+            current_price = data.get('currentPrice', {})
+            if not isinstance(current_price, dict):
+                return None
 
-                return {
-                    'company_name': data.get('companyName', ''),
-                    'industry': data.get('industry', ''),
-                    'ltp': float(ltp),
-                    'nse_price': current_price.get('NSE'),
-                    'bse_price': current_price.get('BSE'),
-                    'percent_change': data.get('percentChange'),
-                    'year_high': data.get('yearHigh'),
-                    'year_low': data.get('yearLow'),
-                    'technical_data': data.get('stockTechnicalData'),
-                    'key_metrics': data.get('keyMetrics'),
-                    'raw_data': data
-                }
+            # Get LTP from NSE or BSE
+            ltp = current_price.get('NSE') or current_price.get('BSE')
+            if ltp is None:
+                return None
 
+            # Convert LTP to float safely
+            try:
+                ltp = float(ltp)
+            except (ValueError, TypeError):
+                return None
+
+            return {
+                'company_name': data.get('companyName', ''),
+                'industry': data.get('industry', ''),
+                'ltp': ltp,
+                'nse_price': current_price.get('NSE'),
+                'bse_price': current_price.get('BSE'),
+                'percent_change': data.get('percentChange'),
+                'year_high': data.get('yearHigh'),
+                'year_low': data.get('yearLow'),
+                'technical_data': data.get('stockTechnicalData', {}),
+                'key_metrics': data.get('keyMetrics', {}),
+            }
+
+        except requests.exceptions.Timeout:
             return None
-
-        except requests.exceptions.RequestException as e:
-            logger.error(f"Network error fetching IndianAPI data for {stock_name}: {e}")
+        except requests.exceptions.RequestException:
             return None
-        except ValueError as e:
-            logger.error(f"JSON parsing error for {stock_name}: {e}")
+        except (ValueError, KeyError):
             return None
-        except Exception as e:
-            logger.error(f"Unexpected error fetching IndianAPI data for {stock_name}: {e}")
+        except Exception:
             return None
 
     def get(self, request, room_id):
+        """Get stock data for a symbol"""
         symbol = None
+        
         try:
+            # Validate room and participant
             room = Room.objects.filter(id=room_id).first()
             if not room:
-                return Response({"error": "Room not found"}, status=status.HTTP_404_NOT_FOUND)
+                return Response(
+                    {"error": "Room not found"}, 
+                    status=status.HTTP_404_NOT_FOUND
+                )
 
             participant = RoomParticipant.objects.filter(
                 user=request.user,
                 room=room,
                 is_active=True
             ).first()
+            
             if not participant:
                 return Response({
                     "error": "You are not an active participant in this room"
                 }, status=status.HTTP_403_FORBIDDEN)
 
+            # Validate symbol parameter
             symbol = request.GET.get('symbol', '').strip().upper()
-            if not symbol or len(symbol) < 1:
+            if not symbol:
                 return Response({
                     "error": "Symbol parameter is required"
                 }, status=status.HTTP_400_BAD_REQUEST)
 
-            logger.info(f"Fetching stock data for symbol: {symbol}")
-
+            # Check if symbol exists in database
             stock_exists = Stock.objects.filter(symbol=symbol).exists()
             sme_exists = SMEStock.objects.filter(symbol=symbol).exists()
 
-            if not stock_exists and not sme_exists:
+            if not (stock_exists or sme_exists):
                 return Response({
-                    "error": f"Symbol '{symbol}' not found in database",
-                    "symbol": symbol,
-                    "debug": {
-                        "stock_exists": stock_exists,
-                        "sme_exists": sme_exists
-                    }
+                    "error": f"Symbol '{symbol}' not found in our database",
+                    "symbol": symbol
                 }, status=status.HTTP_404_NOT_FOUND)
 
+            # Get stock name and fetch data
             stock_name = self.get_stock_name(symbol)
             stock_data = self.get_indianapi_stock_data(stock_name)
 
-            if stock_data:
+            if not stock_data:
                 return Response({
-                    "success": True,
-                    "symbol": symbol,
-                    "company_name": stock_data['company_name'],
-                    "industry": stock_data['industry'],
-                    "ltp": stock_data['ltp'],
-                    "current_price": {
-                        "NSE": stock_data['nse_price'],
-                        "BSE": stock_data['bse_price']
-                    },
-                    "percent_change": stock_data['percent_change'],
-                    "year_high": stock_data['year_high'],
-                    "year_low": stock_data['year_low'],
-                    "technical_data": stock_data['technical_data'],
-                    "key_metrics": stock_data['key_metrics'],
-                    "source": "IndianAPI"
-                }, status=status.HTTP_200_OK)
-            else:
-                return Response({
-                    "error": "Stock data not available for this symbol",
-                    "symbol": symbol,
-                    "debug": {
-                        "stock_name_used": stock_name,
-                        "stock_exists": stock_exists,
-                        "sme_exists": sme_exists,
-                        "indianapi_response": "No data received or invalid response"
-                    }
+                    "error": "Unable to fetch current stock data. Please try again later.",
+                    "symbol": symbol
                 }, status=status.HTTP_404_NOT_FOUND)
 
-        except Exception as e:
-            logger.error(f"Error in StockDataView for symbol {symbol}: {e}")
-            import traceback
-            logger.error(f"Full traceback: {traceback.format_exc()}")
+            # Return successful response
             return Response({
-                "error": f"An error occurred: {str(e)}",
-                "symbol": symbol if symbol else None
-            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+                "success": True,
+                "symbol": symbol,
+                "company_name": stock_data['company_name'],
+                "industry": stock_data['industry'],
+                "ltp": stock_data['ltp'],
+                "current_price": {
+                    "NSE": stock_data['nse_price'],
+                    "BSE": stock_data['bse_price']
+                },
+                "percent_change": stock_data['percent_change'],
+                "year_high": stock_data['year_high'],
+                "year_low": stock_data['year_low'],
+                "technical_data": stock_data['technical_data'],
+                "key_metrics": stock_data['key_metrics'],
+                "source": "IndianAPI"
+            }, status=status.HTTP_200_OK)
 
+        except Exception as e:
+            return Response({
+                "error": "An internal error occurred. Please try again later.",
+                "symbol": symbol
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 class UserPortfolioView(APIView):
     """
