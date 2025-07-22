@@ -432,60 +432,215 @@ class RoomTradeBuyView(APIView):
 class RoomTradeSellView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
+    def get_stock_name(self, symbol):
+        """Get company name from symbol, fallback to symbol if not found"""
+        try:
+            # Check regular stocks first
+            stock = Stock.objects.filter(symbol=symbol).first()
+            if stock and hasattr(stock, 'name_of_company') and stock.name_of_company:
+                return stock.name_of_company.strip()
+
+            # Check SME stocks
+            sme_stock = SMEStock.objects.filter(symbol=symbol).first()
+            if sme_stock and hasattr(sme_stock, 'name_of_company') and sme_stock.name_of_company:
+                return sme_stock.name_of_company.strip()
+
+            # Fallback to symbol
+            return symbol
+        except Exception:
+            return symbol
+
+    def get_indianapi_stock_data(self, stock_name):
+        """Fetch stock data from IndianAPI"""
+        try:
+            base_url = "https://stock.indianapi.in/stock"
+            params = {'name': stock_name}
+            headers = {
+                "X-Api-Key": settings.INDIANAPI_KEY,
+                "Content-Type": "application/json"
+            }
+
+            response = requests.get(
+                base_url,
+                headers=headers,  
+                params=params
+            )
+            response.raise_for_status()
+            data = response.json()
+
+            # Validate response structure
+            if not data:
+                return None
+
+            current_price = data.get('currentPrice', {})
+
+            # Get LTP from NSE or BSE
+            ltp = current_price.get('NSE') or current_price.get('BSE')
+            if ltp is None:
+                return None
+
+            # Convert LTP to float safely
+            try:
+                ltp = float(ltp)
+            except (ValueError, TypeError):
+                return None
+
+            return {
+                'ltp': ltp,
+                'company_name': data.get('companyName', ''),
+            }
+
+        except Exception:
+            return None
+
     def post(self, request, room_id):
         try:
             user = request.user
             data = request.data
 
+            # Validate room
             room = Room.objects.filter(id=room_id).first()
             if not room:
                 return Response({"error": "Room not found"}, status=status.HTTP_404_NOT_FOUND)
 
+            # Check if room is active
             now = timezone.now()
             check_and_close_room(room)
             if room.is_closed:
                 return Response({"error": "Room is closed, no more trades allowed"}, status=403)
-            
+
             if not (room.start_time and room.end_time and room.start_time <= now <= room.end_time):
                 return Response({"error": "Room is not active yet"}, status=403)
 
+            # Validate participant
             participant = RoomParticipant.objects.filter(user=user, room=room, is_active=True).first()
             if not participant:
                 return Response({"error": "You are not an active participant in this room"}, status=status.HTTP_403_FORBIDDEN)
 
-            # Extract order data
-            symbol = data.get("symbol")
+            # Extract and validate input data
+            symbol = data.get("symbol", "").strip().upper()
             quantity = int(data.get("quantity", 0))
-            price_per_stock = Decimal(data.get("price_per_stock", 0))
 
-            if not symbol or quantity <= 0 or price_per_stock <= 0:
-                return Response({"error": "Invalid input"}, status=status.HTTP_400_BAD_REQUEST)
+            if not symbol or quantity <= 0:
+                return Response({"error": "Invalid input: symbol and positive quantity are required"}, status=status.HTTP_400_BAD_REQUEST)
 
-            # Prepare order data for trading service
-            order_data = {
-                'order_type': OrderBook.SELL,
-                'symbol': symbol,
-                'quantity': quantity,
-                'order_price': price_per_stock,
-                'order_category': OrderBook.MARKET,  # Market order for immediate execution
+            # Check if symbol exists in database
+            stock_exists = Stock.objects.filter(symbol=symbol).exists()
+            sme_exists = SMEStock.objects.filter(symbol=symbol).exists()
+
+            if not (stock_exists or sme_exists):
+                return Response({
+                    "error": f"Symbol '{symbol}' not found in our database"
+                }, status=status.HTTP_404_NOT_FOUND)
+
+            # ========================================
+            # TODO: CHECK USER'S PORTFOLIO FOR AVAILABLE QUANTITY
+            # Replace this with actual portfolio checking logic
+            # Example: portfolio = Portfolio.objects.filter(user=user, room=room, symbol=symbol).first()
+            # available_quantity = portfolio.quantity if portfolio else 0
+            # ========================================
+            
+            # For now, assuming user has sufficient quantity
+            available_quantity = 100  # REPLACE THIS WITH ACTUAL PORTFOLIO CHECK
+            
+            if available_quantity < quantity:
+                return Response({
+                    "error": "Insufficient quantity in portfolio",
+                    "requested": quantity,
+                    "available": available_quantity
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+            # Get stock name and fetch current market price
+            stock_name = self.get_stock_name(symbol)
+            if not stock_name:
+                return Response({"error": "Stock name not found"}, status=status.HTTP_404_NOT_FOUND)
+            
+            stock_data = self.get_indianapi_stock_data(symbol)
+            if not stock_data or not stock_data.get('ltp'):
+                return Response({
+                    "error": "Unable to fetch current market price. Please try again later."
+                }, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+
+            current_price = Decimal(str(stock_data['ltp']))
+            total_proceeds = current_price * quantity
+
+            # ========================================
+            # TODO: FETCH USER'S CURRENT BALANCE
+            # Replace this with actual balance fetching logic
+            # Example: current_balance = get_user_balance(user, room)
+            # ========================================
+            
+            # For now, assuming a dummy balance
+            current_balance = Decimal('50000.00')  # REPLACE THIS WITH ACTUAL BALANCE FETCH
+
+            # ========================================
+            # TODO: ADD PROCEEDS TO USER'S BALANCE
+            # Add logic to add the total_proceeds to user's balance
+            # Example: add_to_balance(user, room, total_proceeds)
+            # ========================================
+
+            new_balance = current_balance + total_proceeds
+
+            # # Create the sell order
+            # order = OrderBook.objects.create(
+            #     user=user,
+            #     room=room,
+            #     order_type=OrderBook.SELL,
+            #     symbol=symbol,
+            #     quantity=quantity,
+            #     order_price=current_price,
+            #     order_category=OrderBook.MARKET,
+            #     status=OrderBook.EXECUTED,  # Market orders execute immediately
+            #     executed_quantity=quantity,
+            #     executed_price=current_price,
+            #     executed_at=timezone.now()
+            # )
+
+            # # Update portfolio
+            # portfolio = Portfolio.objects.filter(user=user, room=room, symbol=symbol).first()
+            # if portfolio:
+            #     # Calculate profit/loss
+            #     sold_value = quantity * portfolio.average_price
+            #     profit_loss = total_proceeds - sold_value
+                
+            #     # Update portfolio quantities
+            #     portfolio.quantity -= quantity
+            #     portfolio.total_invested = portfolio.quantity * portfolio.average_price
+                
+            #     if portfolio.quantity == 0:
+            #         portfolio.delete()  # Remove from portfolio if all shares sold
+            #     else:
+            #         portfolio.save()
+
+            # # Create transaction record
+            # transaction = Transaction.objects.create(
+            #     user=user,
+            #     room=room,
+            #     order=order,
+            #     transaction_type=Transaction.SELL,
+            #     symbol=symbol,
+            #     quantity=quantity,
+            #     price=current_price,
+            #     total_amount=total_proceeds
+            # )
+
+            response_data = {
+                "success": True,
+                "message": "Sell order executed successfully",
+                "symbol": symbol,
+                "quantity": quantity,
+                "executed_price": float(current_price),
+                "total_proceeds": float(total_proceeds),
+                "new_balance": float(new_balance),
+                "previous_balance": float(current_balance)
             }
 
-            # Use trading service to place the order
-            success, message, order = trading_service.place_order(user, room, order_data)
-
-            if success:
-                return Response({
-                    "message": message,
-                    "order_id": order.id if order else None,
-                    "trade_executed": True
-                }, status=status.HTTP_201_CREATED)
-            else:
-                return Response({"error": message}, status=status.HTTP_400_BAD_REQUEST)
+            return Response(response_data, status=status.HTTP_201_CREATED)
 
         except ValueError as e:
             return Response({"error": f"Invalid data format: {str(e)}"}, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
-            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            return Response({"error": f"An error occurred: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 class RoomLeaderboardView(APIView):
     permission_classes = [IsAuthenticated]
