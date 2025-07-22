@@ -938,32 +938,36 @@ class HistoricalDataView(APIView):
                     instrument_key=instrument_key,
                     interval=interval,
                     unit=unit,
-                    from_date="2024-06-01",
-                    to_date="2024-06-30"
+                    from_date=from_date,
+                    to_date=to_date
                 )
 
-                if response and response.status == "success":
-                    candles = getattr(response, 'candles', None)
-                    if not candles:
-                        return Response({"error": "No historical data found for the symbol"}, status=404)
-                    formatted_candles = []
-                    for candle in candles:
-                        if len(candle) >= 6:
-                            formatted_candles.append({
-                                'timestamp': candle[0],
-                                'open': float(candle[1]),
-                                'high': float(candle[2]),
-                                'low': float(candle[3]),
-                                'close': float(candle[4]),
-                                'volume': int(candle[5]),
-                            })
+                candles_data = getattr(response, "data", {}).get("candles", [])
+                if not candles_data:
+                    return Response({
+                        "error": "No historical data found for the symbol",
+                        "symbol": symbol
+                    }, status=404)
+
+                formatted_candles = []
+                for candle in candles_data:
+                    if len(candle) >= 6:
+                        formatted_candles.append({
+                            "timestamp": candle[0],
+                            "open": float(candle[1]),
+                            "high": float(candle[2]),
+                            "low": float(candle[3]),
+                            "close": float(candle[4]),
+                            "volume": int(candle[5]),
+                        })
 
                 return Response({
                     "symbol": symbol,
-                    "interval": interval,
+                    "interval": raw_interval,
+                    "from": from_date,
+                    "to": to_date,
                     "candles": formatted_candles
                 }, status=status.HTTP_200_OK)
-
             except ApiException as api_error:
                 logger.error(f"Upstox API error for {symbol}: {api_error}")
                 return Response({
@@ -993,7 +997,7 @@ class HistoricalDataView(APIView):
             stock = Stock.objects.filter(symbol=symbol).first()
             if stock and stock.isin_number:
                 instrument_key = f"NSE_EQ|{stock.isin_number}"
-                cache.set(cache_key, instrument_key, 600)  # cache for 10 minutes
+                cache.set(cache_key, instrument_key, 600)
                 return instrument_key
 
             # Then check SMEStock table
