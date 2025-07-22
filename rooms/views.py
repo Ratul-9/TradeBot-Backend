@@ -950,7 +950,7 @@ class HistoricalDataView(APIView):
                     to_date=to_date
                 )
 
-                return Response({"data": response.to_dic()})
+                return Response({"data": response.to_dict()})
 
                 candles_data = getattr(response, "data", {}).get("candles", [])
                 if not candles_data:
