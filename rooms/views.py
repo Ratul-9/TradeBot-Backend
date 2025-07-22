@@ -375,10 +375,9 @@ class RoomTradeBuyView(APIView):
                 quantity=quantity,
                 order_price=current_price,
                 order_category=OrderBook.MARKET,
-                status=OrderBook.EXECUTED,  # Market orders execute immediately
-                executed_quantity=quantity,
+                order_status=OrderBook.EXECUTED,  # Market orders execute immediately
                 executed_price=current_price,
-                executed_at=timezone.now()
+                execution_timestamp=timezone.now()
             )
 
             # Update or create portfolio entry
