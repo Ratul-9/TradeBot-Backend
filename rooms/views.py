@@ -587,7 +587,9 @@ class RoomTradeSellView(APIView):
                 execution_timestamp=timezone.now()
             )
 
-            if not UserPortfolio.add_sell_transaction(quantity, current_price):
+            portfolio = UserPortfolio()
+
+            if not portfolio.add_sell_transaction(quantity, current_price):
                 return Response({"error": "Failed to update portfolio"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
             trade = Trade.objects.create(
