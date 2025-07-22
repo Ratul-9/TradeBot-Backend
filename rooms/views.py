@@ -959,8 +959,6 @@ class HistoricalDataView(APIView):
                 return Response({
                     "symbol": symbol,
                     "interval": interval,
-                    "from_date": from_date,
-                    "to_date": to_date,
                     "candles": formatted_candles
                 }, status=status.HTTP_200_OK)
 
