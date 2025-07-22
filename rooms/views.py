@@ -952,7 +952,7 @@ class HistoricalDataView(APIView):
 
                 candles = response.data.candles
 
-                return Response({candles})
+                return Response({"candles": candles})
 
                 candles_data = getattr(response, "data", {}).get("candles", [])
                 if not candles_data:
