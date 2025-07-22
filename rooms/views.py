@@ -22,7 +22,7 @@ from django.db.models import Q
 import logging
 from django.conf import settings
 
-from .services import trading_service, market_service, balance_service, portfolio_service
+from .services import trading_service,balance_service, portfolio_service
 logger = logging.getLogger(__name__)
 User = get_user_model()
 
@@ -417,17 +417,17 @@ class AdminUserRoomDetailsView(APIView):
         holdings = []
         for portfolio in portfolios:
             # Get current market data for each holding
-            market_data = market_service.get_market_data(portfolio.symbol)
-            current_price = market_data['ltp'] if market_data else portfolio.average_buy_price
+            # market_data = market_service.get_market_data(portfolio.symbol)
+            # current_price = market_data['ltp'] if market_data else portfolio.average_buy_price
             
             holdings.append({
                 "symbol": portfolio.symbol,
                 "quantity": portfolio.total_quantity,
                 "average_buy_price": str(portfolio.average_buy_price),
-                "current_price": str(current_price),
+                # "current_price": str(current_price),
                 "total_buy_value": str(portfolio.total_buy_value),
-                "current_value": str(portfolio.total_quantity * current_price),
-                "unrealized_pnl": str(portfolio.calculate_unrealized_pnl(current_price))
+                # "current_value": str(portfolio.total_quantity * current_price),
+                # "unrealized_pnl": str(portfolio.calculate_unrealized_pnl(current_price))
             })
 
         trades = Trade.objects.filter(user=user, room=room).order_by('-trade_timestamp')[:20]
@@ -738,17 +738,17 @@ class UserPortfolioView(APIView):
             holdings = []
             for portfolio in portfolios:
                 # Get current market data for each holding
-                market_data = market_service.get_market_data(portfolio.symbol)
-                current_price = market_data['ltp'] if market_data else portfolio.average_buy_price
+                # market_data = market_service.get_market_data(portfolio.symbol)
+                # current_price = market_data['ltp'] if market_data else portfolio.average_buy_price
                 
                 holdings.append({
                     "symbol": portfolio.symbol,
                     "quantity": portfolio.total_quantity,
                     "average_buy_price": str(portfolio.average_buy_price),
-                    "current_price": str(current_price),
+                    # "current_price": str(current_price),
                     "total_investment": str(portfolio.total_buy_value - portfolio.total_sell_value),
-                    "current_value": str(portfolio.total_quantity * current_price),
-                    "unrealized_pnl": str(portfolio.calculate_unrealized_pnl(current_price)),
+                    # "current_value": str(portfolio.total_quantity * current_price),
+                    # "unrealized_pnl": str(portfolio.calculate_unrealized_pnl(current_price)),
                     "realized_pnl": str(portfolio.realized_pnl)
                 })
 
@@ -897,8 +897,8 @@ class HistoricalDataView(APIView):
                 }, status=status.HTTP_400_BAD_REQUEST)
 
             # Get instrument key for the symbol
-            instrument_key = market_service.get_instrument_key(symbol)
-            if not instrument_key:
+            # instrument_key = market_service.get_instrument_key(symbol)
+            # if not instrument_key:
                 return Response({
                     "error": f"Instrument key not found for symbol: {symbol}"
                 }, status=status.HTTP_404_NOT_FOUND)
@@ -909,7 +909,7 @@ class HistoricalDataView(APIView):
                 
                 # Fetch historical data from Upstox
                 response = historical_api.get_historical_candle_data1(
-                    instrument_key=instrument_key,
+                    # instrument_key=instrument_key,
                     interval=interval,
                     to_date=to_date,
                     from_date=from_date
