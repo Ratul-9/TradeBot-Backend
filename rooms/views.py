@@ -933,13 +933,13 @@ class HistoricalDataView(APIView):
             # === Upstox SDK ===
             historical_api = upstox_client.HistoryV3Api()
 
-            return Response({
-                "instruement_key": instrument_key,
-                "interval": interval,
-                "unit": unit,
-                "from": from_date,
-                "to": to_date
-            })
+            # return Response({
+            #     "instruement_key": instrument_key,
+            #     "interval": interval,
+            #     "unit": unit,
+            #     "from": from_date,
+            #     "to": to_date
+            # })
 
             try:
                 response = historical_api.get_historical_candle_data1(
@@ -949,6 +949,8 @@ class HistoricalDataView(APIView):
                     from_date=from_date,
                     to_date=to_date
                 )
+
+                return Response({response})
 
                 candles_data = getattr(response, "data", {}).get("candles", [])
                 if not candles_data:
