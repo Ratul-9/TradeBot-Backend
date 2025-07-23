@@ -539,21 +539,25 @@ class RoomTradeSellView(APIView):
                     "error": f"Symbol '{symbol}' not found in our database"
                 }, status=status.HTTP_404_NOT_FOUND)
 
-            # ========================================
-            # TODO: CHECK USER'S PORTFOLIO FOR AVAILABLE QUANTITY
-            # Replace this with actual portfolio checking logic
-            # Example: portfolio = Portfolio.objects.filter(user=user, room=room, symbol=symbol).first()
-            # available_quantity = portfolio.quantity if portfolio else 0
-            # ========================================
-            
-            # For now, assuming user has sufficient quantity
-            available_quantity = 100  # REPLACE THIS WITH ACTUAL PORTFOLIO CHECK
-            
-            if available_quantity < quantity:
+            # Fetch user's portfolio for this stock
+            portfolio = UserPortfolio.objects.filter(
+                user=user,
+                room=room,
+                symbol=symbol
+            ).first()
+
+            if not portfolio:
+                return Response({
+                    "error": f"No portfolio found for symbol {symbol}",
+                    "detail": "You don't own this stock in your portfolio"
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+            # Check available quantity
+            if portfolio.available_quantity < quantity:
                 return Response({
                     "error": "Insufficient quantity in portfolio",
                     "requested": quantity,
-                    "available": available_quantity
+                    "available": portfolio.available_quantity
                 }, status=status.HTTP_400_BAD_REQUEST)
 
             # Get stock name and fetch current market price
@@ -568,25 +572,24 @@ class RoomTradeSellView(APIView):
                 }, status=status.HTTP_503_SERVICE_UNAVAILABLE)
 
             current_price = Decimal(str(stock_data['ltp']))
-            total_proceeds = current_price * quantity
+            total_proceeds = current_price * Decimal(quantity)  # Use Decimal for precision
 
-            # ========================================
-            # TODO: FETCH USER'S CURRENT BALANCE
-            # Replace this with actual balance fetching logic
-            # Example: current_balance = get_user_balance(user, room)
-            # ========================================
-            
-            # For now, assuming a dummy balance
-            current_balance = Decimal('50000.00')  # REPLACE THIS WITH ACTUAL BALANCE FETCH
+            # Fetch or create user's balance for this room
+            balance, created = UserBalance.objects.get_or_create(
+                user=user,
+                room=room,
+                defaults={
+                    'total_cash_balance': Decimal('100000.00'),
+                    'reserved_cash_balance': Decimal('0.00')
+                }
+            )
 
-            # ========================================
-            # TODO: ADD PROCEEDS TO USER'S BALANCE
-            # Add logic to add the total_proceeds to user's balance
-            # Example: add_to_balance(user, room, total_proceeds)
-            # ========================================
+            if not portfolio.reserve_quantity(quantity):
+                return Response({
+                    "error": "Failed to reserve quantity for the sell order"
+                }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-            new_balance = current_balance + total_proceeds
-
+            # Create the sell order
             order = OrderBook.objects.create(
                 user=user,
                 room=room,
@@ -601,21 +604,17 @@ class RoomTradeSellView(APIView):
                 execution_timestamp=timezone.now()
             )
 
-            portfolio = UserPortfolio.objects.filter(
-                user=user,
-                room=room,
-                symbol=symbol
-            ).first()
-
-            if not portfolio:
-                return Response({
-                    "error": f"No portfolio found for symbol {symbol}",
-                    "detail": "You don't own this stock in your portfolio"
-                }, status=status.HTTP_400_BAD_REQUEST)
-
+            # Execute the sell transaction in portfolio
             if not portfolio.add_sell_transaction(quantity, current_price):
-                return Response({"error": "Failed to update portfolio"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR) 
-                 
+                # Rollback reservation if sell fails
+                portfolio.release_quantity_reservation(quantity)
+                return Response({"error": "Failed to update portfolio"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+            # Add proceeds to balance
+            previous_balance = balance.available_cash_balance
+            balance.add_cash(total_proceeds)
+
+            # Create trade record
             trade = Trade.objects.create(
                 user=user,
                 room=room,
@@ -636,8 +635,8 @@ class RoomTradeSellView(APIView):
                 "quantity": quantity,
                 "executed_price": float(current_price),
                 "total_proceeds": float(total_proceeds),
-                # "new_balance": float(balance.available_cash_balance),
-                # "previous_balance": float(previous_balance),
+                "new_balance": float(balance.available_cash_balance),
+                "previous_balance": float(previous_balance),
                 "portfolio": {
                     "remaining_quantity": portfolio.total_quantity,
                     "average_price": float(portfolio.average_buy_price),
