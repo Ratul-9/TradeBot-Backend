@@ -341,30 +341,39 @@ class RoomTradeBuyView(APIView):
                 }, status=status.HTTP_503_SERVICE_UNAVAILABLE)
 
             current_price = Decimal(str(stock_data['ltp']))
-            total_cost = current_price * quantity
+            total_cost = current_price * Decimal(quantity)  # Use Decimal for precision
 
-            # ========================================
-            # TODO: FETCH USER'S AVAILABLE BALANCE
-            # Replace this with actual balance fetching logic
-            # Example: available_balance = get_user_balance(user, room)
-            # ========================================
-            
-            # For now, assuming a dummy balance
-            available_balance = Decimal('100000.00')  # REPLACE THIS WITH ACTUAL BALANCE FETCH
+            # Fetch or create user's balance for this room
+            balance, created = UserBalance.objects.get_or_create(
+                user=user,
+                room=room,
+                defaults={
+                    'total_cash_balance': Decimal('100000.00'),
+                    'reserved_cash_balance': Decimal('0.00')
+                }
+            )
 
-            # Check if user has sufficient balance
-            if available_balance < total_cost:
+            # Check if user has sufficient available balance
+            if balance.available_cash_balance < total_cost:
                 return Response({
                     "error": "Insufficient balance",
                     "required": float(total_cost),
-                    "available": float(available_balance)
+                    "available": float(balance.available_cash_balance)
                 }, status=status.HTTP_400_BAD_REQUEST)
 
-            # ========================================
-            # TODO: DEDUCT BALANCE FROM USER'S ACCOUNT
-            # Add logic to deduct the total_cost from user's balance
-            # Example: deduct_balance(user, room, total_cost)
-            # ========================================
+            # Reserve the cash for the buy order
+            if not balance.reserve_cash(total_cost):
+                return Response({
+                    "error": "Failed to reserve cash for the order"
+                }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+            # Execute the reservation (deduct from total balance) since it's a market order
+            if not balance.execute_cash_reservation(total_cost):
+                # If execution fails, release the reservation to rollback
+                balance.release_cash_reservation(total_cost)
+                return Response({
+                    "error": "Failed to execute cash deduction"
+                }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
             # Create the buy order
             order = OrderBook.objects.create(
@@ -386,13 +395,18 @@ class RoomTradeBuyView(APIView):
                 room=room,
                 symbol=symbol,
                 defaults={
+                    'stock_name': stock_name,  # Set stock name if creating new
                     'total_quantity': 0,
-                    'average_buy_price': Decimal('0'),
-                    'total_buy_value': Decimal('0')
+                    'average_buy_price': Decimal('0.00'),
+                    'total_buy_value': Decimal('0.00')
                 }
             )
+            if not created:
+                portfolio.stock_name = stock_name  # Update stock name if already exists
             portfolio.add_buy_transaction(quantity, current_price)
-            stock_name = self.get_stock_name(symbol)
+            portfolio.save()  # Ensure save after update
+
+            # Create trade record
             trade = Trade.objects.create(
                 user=user,
                 room=room,
@@ -413,7 +427,7 @@ class RoomTradeBuyView(APIView):
                 "quantity": quantity,
                 "executed_price": float(current_price),
                 "total_cost": float(total_cost),
-                "remaining_balance": float(available_balance - total_cost)
+                "remaining_balance": float(balance.available_cash_balance)
             }, status=status.HTTP_201_CREATED)
 
         except ValueError as e:
@@ -1546,65 +1560,6 @@ class HistoricalDataView(APIView):
             logger.error(f"Error fetching instrument key for {symbol}: {e}")
             return None
 
-# class BatchMarketDataView(APIView):
-#     """
-#     View to get market data for multiple symbols at once
-#     """
-#     permission_classes = [IsAuthenticated]
-
-#     def post(self, request, room_id):
-#         try:
-#             room = Room.objects.filter(id=room_id).first()
-#             if not room:
-#                 return Response({"error": "Room not found"}, status=status.HTTP_404_NOT_FOUND)
-
-#             participant = RoomParticipant.objects.filter(
-#                 user=request.user, 
-#                 room=room, 
-#                 is_active=True
-#             ).first()
-#             if not participant:
-#                 return Response({
-#                     "error": "You are not an active participant in this room"
-#                 }, status=status.HTTP_403_FORBIDDEN)
-
-#             symbols = request.data.get('symbols', [])
-#             if not symbols or not isinstance(symbols, list):
-#                 return Response({
-#                     "error": "Symbols array is required"
-#                 }, status=status.HTTP_400_BAD_REQUEST)
-
-#             if len(symbols) > 50:  # Limit batch size
-#                 return Response({
-#                     "error": "Maximum 50 symbols allowed per batch request"
-#                 }, status=status.HTTP_400_BAD_REQUEST)
-
-#             market_data_results = {}
-#             failed_symbols = []
-
-#             for symbol in symbols:
-#                 try:
-#                     market_data = market_service.get_market_data(symbol.strip().upper())
-#                     if market_data:
-#                         market_data_results[symbol] = market_data
-#                     else:
-#                         failed_symbols.append(symbol)
-#                 except Exception as e:
-#                     failed_symbols.append(symbol)
-
-#             return Response({
-#                 "success": True,
-#                 "market_data": market_data_results,
-#                 "failed_symbols": failed_symbols,
-#                 "total_requested": len(symbols),
-#                 "successful": len(market_data_results),
-#                 "failed": len(failed_symbols)
-#             }, status=status.HTTP_200_OK)
-
-#         except Exception as e:
-#             return Response({
-#                 "error": f"An error occurred: {str(e)}"
-#             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 class PendingOrdersView(APIView):

@@ -51,7 +51,7 @@ urlpatterns = [
     
     # Portfolio and orders
     path('<int:room_id>/portfolio/', UserPortfolioView.as_view(), name='user-portfolio'), #Working
-    path('<int:room_id>/orders/', OrderHistoryView.as_view(), name='order-history'),
+    path('<int:room_id>/orders/', OrderHistoryView.as_view(), name='order-history'), #Working
     path('<int:room_id>/pending-orders/', PendingOrdersView.as_view(), name='pending-orders'),
     path('<int:room_id>/orders/<int:order_id>/cancel/', CancelOrderView.as_view(), name='cancel-order'),
     path('<int:room_id>/orders/bulk-cancel/', BulkCancelOrdersView.as_view(), name='bulk-cancel-orders'),
@@ -59,7 +59,7 @@ urlpatterns = [
     # Market data
     path('<int:room_id>/stockData/', StockDataView.as_view(), name='market-data'), #Working
     path('<int:room_id>/historical-data/', HistoricalDataView.as_view(), name='historical-data'), #Working
-    path('market-status/', MarketStatusView.as_view(), name='market-status'),
+    path('market-status/', MarketStatusView.as_view(), name='market-status'), #Working
     
     # Stock search and lookup
     path('<int:room_id>/search/', StockSearchView.as_view(), name='search-stock'),
@@ -70,5 +70,5 @@ urlpatterns = [
     path('<int:room_id>/user-details/<int:user_id>/', AdminUserRoomDetailsView.as_view(), name='admin-user-room-details'),
     
     # Utility endpoints
-    path('health/', HealthCheckView.as_view(), name='health-check'),
+    path('health/', HealthCheckView.as_view(), name='health-check'), #Working
 ]
