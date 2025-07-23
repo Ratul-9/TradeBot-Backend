@@ -587,11 +587,21 @@ class RoomTradeSellView(APIView):
                 execution_timestamp=timezone.now()
             )
 
-            portfolio = UserPortfolio()
+            portfolio = UserPortfolio.objects.filter(
+                user=user,
+                room=room,
+                symbol=symbol
+            ).first()
+
+            if not portfolio:
+                return Response({
+                    "error": f"No portfolio found for symbol {symbol}",
+                    "detail": "You don't own this stock in your portfolio"
+                }, status=status.HTTP_400_BAD_REQUEST)
 
             if not portfolio.add_sell_transaction(quantity, current_price):
-                return Response({"error": "Failed to update portfolio"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
+                return Response({"error": "Failed to update portfolio"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR) 
+                 
             trade = Trade.objects.create(
                 user=user,
                 room=room,
