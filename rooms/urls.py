@@ -26,7 +26,8 @@ from .views import (
     MarketStatusView,
     # BulkCancelOrdersView,
     HealthCheckView,
-    UserMeView
+    UserMeView,
+    UserBalanceView
 )
 
 urlpatterns = [
@@ -44,6 +45,7 @@ urlpatterns = [
     # Trading operations
     path('<int:room_id>/buy/', RoomTradeBuyView.as_view(), name='buy'), #Working
     path('<int:room_id>/sell/', RoomTradeSellView.as_view(), name='sell'), #Working
+    path('<int:room_id>/balance/', UserBalanceView.as_view(), name='user-balance'),
     # path('<int:room_id>/limit-order/', PlaceLimitOrderView.as_view(), name='place-limit-order'),
     path('<int:room_id>/leaderboard/', RoomLeaderboardView.as_view(), name='leaderboard'), #Working
     path('<int:room_id>/tradehistory/', RoomTradeHistoryView.as_view(), name='trade-record'), #Working

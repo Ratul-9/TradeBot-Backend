@@ -1682,3 +1682,59 @@ class UserRoomsView(APIView):
             return Response({
                 "error": f"An error occurred: {str(e)}"
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+class UserBalanceView(APIView):
+    """
+    Get user's balance for a specific room
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, room_id):
+        try:
+            # Validate room exists
+            room = Room.objects.filter(id=room_id).first()
+            if not room:
+                return Response(
+                    {"error": "Room not found"}, 
+                    status=status.HTTP_404_NOT_FOUND
+                )
+
+            # Check if user is a participant in this room
+            participant = RoomParticipant.objects.filter(
+                user=request.user, 
+                room=room, 
+                is_active=True
+            ).first()
+            
+            if not participant:
+                return Response({
+                    "error": "You are not an active participant in this room"
+                }, status=status.HTTP_403_FORBIDDEN)
+
+            # Get or create user balance for this room
+            balance, created = UserBalance.objects.get_or_create(
+                user=request.user,
+                room=room,
+                defaults={
+                    'total_cash_balance': Decimal('100000.00'),
+                    'reserved_cash_balance': Decimal('0.00')
+                }
+            )
+
+            return Response({
+                "user_id": request.user.id,
+                "username": request.user.username,
+                "room_id": room.id,
+                "room_name": room.name,
+                "balance": {
+                    "total_cash_balance": float(balance.total_cash_balance),
+                    "reserved_cash_balance": float(balance.reserved_cash_balance),
+                    "available_cash_balance": float(balance.available_cash_balance),
+                },
+                "created_new_balance": created
+            }, status=status.HTTP_200_OK)
+
+        except Exception as e:
+            return Response({
+                "error": f"An error occurred: {str(e)}"
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
