@@ -584,11 +584,6 @@ class RoomTradeSellView(APIView):
                 }
             )
 
-            if not portfolio.reserve_quantity(quantity):
-                return Response({
-                    "error": "Failed to reserve quantity for the sell order"
-                }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
             # Create the sell order
             order = OrderBook.objects.create(
                 user=user,
@@ -606,8 +601,6 @@ class RoomTradeSellView(APIView):
 
             # Execute the sell transaction in portfolio
             if not portfolio.add_sell_transaction(quantity, current_price):
-                # Rollback reservation if sell fails
-                portfolio.release_quantity_reservation(quantity)
                 return Response({"error": "Failed to update portfolio"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
             # Add proceeds to balance
@@ -650,7 +643,6 @@ class RoomTradeSellView(APIView):
             return Response({"error": f"Invalid data format: {str(e)}"}, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
             return Response({"error": f"An error occurred: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
 class RoomLeaderboardView(APIView):
     permission_classes = [IsAuthenticated]
 
