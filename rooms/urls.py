@@ -47,7 +47,7 @@ urlpatterns = [
     path('<int:room_id>/sell/', RoomTradeSellView.as_view(), name='sell'), #Working
     path('<int:room_id>/limit-order/', PlaceLimitOrderView.as_view(), name='place-limit-order'),
     path('<int:room_id>/leaderboard/', RoomLeaderboardView.as_view(), name='leaderboard'), #Working
-    path('<int:room_id>/tradehistory/', RoomTradeHistoryView.as_view(), name='trade-record'),
+    path('<int:room_id>/tradehistory/', RoomTradeHistoryView.as_view(), name='trade-record'), #Working
     
     # Portfolio and orders
     path('<int:room_id>/portfolio/', UserPortfolioView.as_view(), name='user-portfolio'), #Working

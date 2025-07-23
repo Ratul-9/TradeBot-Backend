@@ -1317,7 +1317,7 @@ class OrderHistoryView(APIView):
                     "error": "You are not an active participant in this room"
                 }, status=status.HTTP_403_FORBIDDEN)
 
-            orders = OrderBook.objects.filter(user=request.user, room=room).order_by('-order_timestamp')
+            orders = OrderBook.objects.filter(user=request.user, room=room).order_by('order_timestamp')
 
             order_history = []
             for order in orders:
@@ -1328,7 +1328,6 @@ class OrderHistoryView(APIView):
                     "order_category": order.order_category,
                     "quantity": order.quantity,
                     "filled_quantity": order.filled_quantity,
-                    "remaining_quantity": order.remaining_quantity,
                     "order_price": str(order.order_price),
                     "executed_price": str(order.executed_price) if order.executed_price else None,
                     "order_status": order.order_status,
