@@ -625,9 +625,9 @@ class RoomTradeSellView(APIView):
                 # "new_balance": float(balance.available_cash_balance),
                 # "previous_balance": float(previous_balance),
                 "portfolio": {
-                    "remaining_quantity": UserPortfolio.total_quantity,
-                    "average_price": float(UserPortfolio.average_buy_price),
-                    "realized_pnl": float(UserPortfolio.realized_pnl)
+                    "remaining_quantity": portfolio.total_quantity,
+                    "average_price": float(portfolio.average_buy_price),
+                    "realized_pnl": float(portfolio.realized_pnl)
                 }
             }
 
