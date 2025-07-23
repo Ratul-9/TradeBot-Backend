@@ -827,7 +827,7 @@ class RoomTradeHistoryView(APIView):
                 "quantity": trade.quantity,
                 "price": str(trade.price),
                 "total_value": str(trade.total_value),
-                "timestamp": trade.trade_timestamp,
+                "timestamp": trade.timestamp,
             }
             for trade in trades
         ]
