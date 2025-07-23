@@ -1022,6 +1022,33 @@ class UserPortfolioView(APIView):
     """
     permission_classes = [IsAuthenticated]
 
+    def get_stock_data(self, symbol):
+        """Fetch current stock price from IndianAPI"""
+        try:
+            base_url = "https://stock.indianapi.in/stock"
+            params = {'name': symbol}
+            headers = {
+                "X-Api-Key": settings.INDIANAPI_KEY,
+                "Content-Type": "application/json"
+            }
+
+            response = requests.get(base_url, headers=headers, params=params)
+            response.raise_for_status()
+            data = response.json()
+
+            if not data:
+                return None
+
+            current_price = data.get('currentPrice', {})
+            ltp = current_price.get('NSE') or current_price.get('BSE')
+            
+            if ltp is None:
+                return None
+
+            return float(ltp)
+        except Exception:
+            return None
+
     def get(self, request, room_id):
         try:
             room = Room.objects.filter(id=room_id).first()
@@ -1038,36 +1065,79 @@ class UserPortfolioView(APIView):
                     "error": "You are not an active participant in this room"
                 }, status=status.HTTP_403_FORBIDDEN)
 
-            # Use trading service to get comprehensive portfolio summary
-            portfolio_summary = trading_service.get_user_portfolio_summary(request.user, room)
+            portfolios = UserPortfolio.objects.filter(
+                user=request.user,
+                room=room
+            ).exclude(total_quantity=0)
 
-            # Get detailed holdings
-            from .models import UserPortfolio
-            portfolios = UserPortfolio.objects.filter(user=request.user, room=room, total_quantity__gt=0)
+            total_investment = Decimal('0.00')
+            total_current_value = Decimal('0.00')
+            total_realized_pnl = Decimal('0.00')
+            total_unrealized_pnl = Decimal('0.00')
             
             holdings = []
             for portfolio in portfolios:
-                # Get current market data for each holding
-                # market_data = market_service.get_market_data(portfolio.symbol)
-                # current_price = market_data['ltp'] if market_data else portfolio.average_buy_price
+                current_price = self.get_stock_data(portfolio.symbol)
+                if current_price is None:
+                    current_price = float(portfolio.average_buy_price)
+                
+                current_price = Decimal(str(current_price))
+                
+                # Calculate values
+                investment = portfolio.total_buy_value - portfolio.total_sell_value
+                current_value = portfolio.total_quantity * current_price
+                unrealized_pnl = portfolio.calculate_unrealized_pnl(current_price)
+                
+                # Update totals
+                total_investment += investment
+                total_current_value += current_value
+                total_realized_pnl += portfolio.realized_pnl
+                total_unrealized_pnl += unrealized_pnl
                 
                 holdings.append({
                     "symbol": portfolio.symbol,
+                    "stock_name": portfolio.stock_name,
                     "quantity": portfolio.total_quantity,
-                    "average_buy_price": str(portfolio.average_buy_price),
-                    # "current_price": str(current_price),
-                    "total_investment": str(portfolio.total_buy_value - portfolio.total_sell_value),
-                    # "current_value": str(portfolio.total_quantity * current_price),
-                    # "unrealized_pnl": str(portfolio.calculate_unrealized_pnl(current_price)),
-                    "realized_pnl": str(portfolio.realized_pnl)
+                    "available_quantity": portfolio.available_quantity,
+                    "average_buy_price": float(portfolio.average_buy_price),
+                    "current_price": float(current_price),
+                    "total_investment": float(investment),
+                    "current_value": float(current_value),
+                    "unrealized_pnl": float(unrealized_pnl),
+                    "realized_pnl": float(portfolio.realized_pnl),
+                    "pnl_percentage": float(((current_value - investment) / investment * 100) if investment > 0 else 0)
                 })
+
+            # Calculate overall portfolio summary
+            total_pnl = total_realized_pnl + total_unrealized_pnl
+            overall_pnl_percentage = float(((total_current_value - total_investment) / total_investment * 100) if total_investment > 0 else 0)
+
+            portfolio_summary = {
+                "total_investment": float(total_investment),
+                "current_value": float(total_current_value),
+                "total_realized_pnl": float(total_realized_pnl),
+                "total_unrealized_pnl": float(total_unrealized_pnl),
+                "total_pnl": float(total_pnl),
+                "overall_pnl_percentage": overall_pnl_percentage,
+                "total_holdings": len(holdings)
+            }
+
+            balance = UserBalance.objects.filter(user=request.user, room=room).first()
+            if balance:
+                portfolio_summary["available_cash"] = float(balance.available_cash_balance)
+                portfolio_summary["total_portfolio_value"] = float(balance.available_cash_balance + total_current_value)
 
             return Response({
                 "portfolio_summary": portfolio_summary,
                 "holdings": holdings,
                 "room": {
                     "id": room.id,
-                    "name": room.name
+                    "name": room.name,
+                    "is_active": not room.is_closed
+                },
+                "user": {
+                    "id": request.user.id,
+                    "username": request.user.username
                 }
             }, status=status.HTTP_200_OK)
 
