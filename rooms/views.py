@@ -1512,3 +1512,173 @@ class HealthCheckView(APIView):
                 "database": "operational"
             }
         }, status=status.HTTP_200_OK)
+
+
+class UserMeView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+        return Response({
+            "username": user.username,
+            "email": user.email,
+            "is_staff": user.is_staff,
+            "is_superuser": user.is_superuser
+        })
+
+
+class RoomByNameView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, room_name):
+        try:
+            # Look for room by name (case-insensitive)
+            room = Room.objects.filter(name__iexact=room_name).first()
+            
+            # If not found by name, try by code (if you have a code field)
+            if not room:
+                room = Room.objects.filter(code__iexact=room_name).first()
+            
+            if not room:
+                return Response({'error': 'Room not found'}, status=status.HTTP_404_NOT_FOUND)
+
+            return Response({
+                'id': room.id,
+                'name': room.name,
+                'code': getattr(room, 'code', None),  
+                'has_password': bool(room.password),  
+            }, status=status.HTTP_200_OK)
+
+        except Exception as e:
+            return Response({'error': 'Failed to lookup room'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        
+
+class RoomStatsView(APIView):
+    """
+    View to get overall room statistics
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, room_id):
+        try:
+            room = Room.objects.filter(id=room_id).first()
+            if not room:
+                return Response({"error": "Room not found"}, status=status.HTTP_404_NOT_FOUND)
+
+            # Check if user is admin or participant
+            is_admin = request.user == room.admin
+            participant = RoomParticipant.objects.filter(
+                user=request.user, 
+                room=room, 
+                is_active=True
+            ).first()
+
+            if not is_admin and not participant:
+                return Response({
+                    "error": "You don't have access to this room"
+                }, status=status.HTTP_403_FORBIDDEN)
+
+            # Get room statistics
+            total_participants = RoomParticipant.objects.filter(room=room, is_active=True).count()
+            total_trades = Trade.objects.filter(room=room).count()
+            total_volume = Trade.objects.filter(room=room).aggregate(
+                total=Sum('total_value')
+            )['total'] or Decimal('0')
+
+            # Get most active stocks
+            popular_stocks = Trade.objects.filter(room=room).values('symbol').annotate(
+                trade_count=models.Count('id'),
+                total_volume=Sum('total_value')
+            ).order_by('-trade_count')[:10]
+
+            # Get top traders (only if admin)
+            top_traders = []
+                # leaderboard = trading_service.get_room_leaderboard(room)
+                # top_traders = leaderboard[:5]  # Top 5 traders
+
+            return Response({
+                "room": {
+                    "id": room.id,
+                    "name": room.name,
+                    "is_closed": room.is_closed,
+                    "start_time": room.start_time,
+                    "end_time": room.end_time
+                },
+                "statistics": {
+                    "total_participants": total_participants,
+                    "total_trades": total_trades,
+                    "total_volume": str(total_volume),
+                    "popular_stocks": list(popular_stocks),
+                    "top_traders": top_traders if is_admin else []
+                },
+                "user_role": "admin" if is_admin else "participant"
+            }, status=status.HTTP_200_OK)
+
+        except Exception as e:
+            return Response({
+                "error": f"An error occurred: {str(e)}"
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class UserRoomsView(APIView):
+    """
+    View to get all rooms where user is a participant
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        try:
+            user = request.user
+
+            # Get rooms where user is an active participant
+            participant_rooms = RoomParticipant.objects.filter(
+                user=user, 
+                is_active=True
+            ).select_related('room').order_by('-join_time')
+
+            # Get rooms where user is admin
+            admin_rooms = Room.objects.filter(admin=user).order_by('-created_at')
+
+            rooms_data = []
+            
+            # Add participant rooms
+            for participant in participant_rooms:
+                room = participant.room
+                rooms_data.append({
+                    "id": room.id,
+                    "name": room.name,
+                    "role": "participant",
+                    "is_closed": room.is_closed,
+                    "start_time": room.start_time,
+                    "end_time": room.end_time,
+                    "join_time": participant.join_time,
+                    "admin": room.admin.username
+                })
+
+            # Add admin rooms (avoid duplicates)
+            participant_room_ids = {p.room.id for p in participant_rooms}
+            for room in admin_rooms:
+                if room.id not in participant_room_ids:
+                    rooms_data.append({
+                        "id": room.id,
+                        "name": room.name,
+                        "role": "admin",
+                        "is_closed": room.is_closed,
+                        "start_time": room.start_time,
+                        "end_time": room.end_time,
+                        "join_time": None,
+                        "admin": room.admin.username
+                    })
+
+            # Sort by most recent activity
+            rooms_data.sort(key=lambda x: x.get('join_time') or timezone.now(), reverse=True)
+
+            return Response({
+                "rooms": rooms_data,
+                "count": len(rooms_data)
+            }, status=status.HTTP_200_OK)
+
+        except Exception as e:
+            return Response({
+                "error": f"An error occurred: {str(e)}"
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

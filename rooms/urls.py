@@ -8,7 +8,9 @@ from .views import (
     RoomTradeSellView,
     RoomLeaderboardView,
     RoomTradeHistoryView,
+    # AdminUserRoomDetailsView,
     RoomCloseView,
+    RoomByNameView,
     ParticipantView,
     LiveRoomView,
     StockSearchView,
@@ -16,8 +18,15 @@ from .views import (
     StockDataView,
     UserPortfolioView,
     OrderHistoryView,
+    # CancelOrderView,
+    # PendingOrdersView,
+    RoomStatsView,
+    UserRoomsView,
+    # PlaceLimitOrderView,
     MarketStatusView,
+    # BulkCancelOrdersView,
     HealthCheckView,
+    UserMeView
 )
 
 urlpatterns = [
@@ -29,16 +38,22 @@ urlpatterns = [
     path('<int:room_id>/close/', RoomCloseView.as_view(), name='close-room'), #Working
     path('<int:room_id>/status/', LiveRoomView.as_view(), name='status'), #working
     path('<int:room_id>/participants/', ParticipantView.as_view(), name='participants'), #Working
+    path('<int:room_id>/stats/', RoomStatsView.as_view(), name='room-stats'), #Working
+    path('by-name/<str:room_name>/', RoomByNameView.as_view(), name='room-by-name'),   #not working
     
     # Trading operations
     path('<int:room_id>/buy/', RoomTradeBuyView.as_view(), name='buy'), #Working
     path('<int:room_id>/sell/', RoomTradeSellView.as_view(), name='sell'), #Working
+    # path('<int:room_id>/limit-order/', PlaceLimitOrderView.as_view(), name='place-limit-order'),
     path('<int:room_id>/leaderboard/', RoomLeaderboardView.as_view(), name='leaderboard'), #Working
     path('<int:room_id>/tradehistory/', RoomTradeHistoryView.as_view(), name='trade-record'), #Working
     
     # Portfolio and orders
     path('<int:room_id>/portfolio/', UserPortfolioView.as_view(), name='user-portfolio'), #Working
     path('<int:room_id>/orders/', OrderHistoryView.as_view(), name='order-history'), #Working
+    # path('<int:room_id>/pending-orders/', PendingOrdersView.as_view(), name='pending-orders'),
+    # path('<int:room_id>/orders/<int:order_id>/cancel/', CancelOrderView.as_view(), name='cancel-order'),
+    # path('<int:room_id>/orders/bulk-cancel/', BulkCancelOrdersView.as_view(), name='bulk-cancel-orders'),
     
     # Market data
     path('<int:room_id>/stockData/', StockDataView.as_view(), name='market-data'), #Working
@@ -49,6 +64,9 @@ urlpatterns = [
     path('<int:room_id>/search/', StockSearchView.as_view(), name='search-stock'),
     
     # User management
+    path('users/me/', UserMeView.as_view(), name='user-me'),
+    path('users/rooms/', UserRoomsView.as_view(), name='user-rooms'),
+    # path('<int:room_id>/user-details/<int:user_id>/', AdminUserRoomDetailsView.as_view(), name='admin-user-room-details'),
     
     # Utility endpoints
     path('health/', HealthCheckView.as_view(), name='health-check'), #Working
