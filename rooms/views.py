@@ -24,7 +24,6 @@ from django.db.models import Q
 import logging
 from django.conf import settings
 
-from .services import trading_service,balance_service
 logger = logging.getLogger(__name__)
 User = get_user_model()
 
@@ -77,7 +76,15 @@ class JoinRoomView(APIView):
                 participant.leave_time = None
                 participant.save()
 
-        user_balance = balance_service.get_or_create_balance(user, room)
+        # Get or create user balance for this room
+        user_balance, balance_created = UserBalance.objects.get_or_create(
+            user=user,
+            room=room,
+            defaults={
+                'total_cash_balance': Decimal('100000.00'),
+                'reserved_cash_balance': Decimal('0.00')
+            }
+        )
 
         return Response({
             'message': f'Joined room "{room.name}" successfully.',
@@ -87,6 +94,11 @@ class JoinRoomView(APIView):
                 'admin': room.admin.username,
                 'start_time': room.start_time.isoformat() if room.start_time else None,
                 'end_time': room.end_time.isoformat() if room.end_time else None,
+            },
+            'balance': {
+                'total_cash': float(user_balance.total_cash_balance),
+                'available_cash': float(user_balance.available_cash_balance),
+                'reserved_cash': float(user_balance.reserved_cash_balance)
             }
         }, status=status.HTTP_200_OK)
      
@@ -143,30 +155,7 @@ class LiveRoomView(APIView):
 
         return Response({"is_closed": availability}, status=status.HTTP_200_OK)
 
-class ParticipantView(APIView):
-    permission_classes = [IsAuthenticated]
 
-    def get(self, request, room_id):
-        try:
-            room = Room.objects.get(id=room_id)
-        except Room.DoesNotExist:
-            return Response({'error': 'Room Not Found'}, status=status.HTTP_404_NOT_FOUND)
-        
-        check_and_close_room(room)
-        room.refresh_from_db()
-
-        participants = RoomParticipant.objects.filter(room=room, is_active=True).order_by('join_time')
-        participant_data = []
-
-        for participant in participants:
-            balance = balance_service.get_or_create_balance(participant.user, room)
-            participant_data.append({
-                'username': participant.user.username,
-                'cash_balance': str(balance.available_cash_balance),
-                'join_time': participant.join_time,
-            })
-        
-        return Response(participant_data, status=status.HTTP_200_OK)
 
 class RoomDetailView(APIView):
     permission_classes = [IsAuthenticated]
@@ -203,8 +192,16 @@ class RoomDetailView(APIView):
         participant_data = []
 
         for participant in participants:
-           
-            balance = balance_service.get_or_create_balance(participant.user, room)
+            # Get or create user balance for this room
+            balance, created = UserBalance.objects.get_or_create(
+                user=participant.user,
+                room=room,
+                defaults={
+                    'total_cash_balance': Decimal('100000.00'),
+                    'reserved_cash_balance': Decimal('0.00')
+                }
+            )
+            
             participant_data.append({
                 'username': participant.user.username,
                 'cash_balance': str(balance.available_cash_balance),
@@ -644,7 +641,7 @@ class RoomTradeSellView(APIView):
         except Exception as e:
             return Response({"error": f"An error occurred: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
         
-        
+
 class RoomLeaderboardView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -1422,72 +1419,72 @@ class HistoricalDataView(APIView):
 
 
 
-class RoomStatsView(APIView):
-    """
-    View to get overall room statistics
-    """
-    permission_classes = [IsAuthenticated]
+# class RoomStatsView(APIView):
+#     """
+#     View to get overall room statistics
+#     """
+#     permission_classes = [IsAuthenticated]
 
-    def get(self, request, room_id):
-        try:
-            room = Room.objects.filter(id=room_id).first()
-            if not room:
-                return Response({"error": "Room not found"}, status=status.HTTP_404_NOT_FOUND)
+#     def get(self, request, room_id):
+#         try:
+#             room = Room.objects.filter(id=room_id).first()
+#             if not room:
+#                 return Response({"error": "Room not found"}, status=status.HTTP_404_NOT_FOUND)
 
-            # Check if user is admin or participant
-            is_admin = request.user == room.admin
-            participant = RoomParticipant.objects.filter(
-                user=request.user, 
-                room=room, 
-                is_active=True
-            ).first()
+#             # Check if user is admin or participant
+#             is_admin = request.user == room.admin
+#             participant = RoomParticipant.objects.filter(
+#                 user=request.user, 
+#                 room=room, 
+#                 is_active=True
+#             ).first()
 
-            if not is_admin and not participant:
-                return Response({
-                    "error": "You don't have access to this room"
-                }, status=status.HTTP_403_FORBIDDEN)
+#             if not is_admin and not participant:
+#                 return Response({
+#                     "error": "You don't have access to this room"
+#                 }, status=status.HTTP_403_FORBIDDEN)
 
-            # Get room statistics
-            total_participants = RoomParticipant.objects.filter(room=room, is_active=True).count()
-            total_trades = Trade.objects.filter(room=room).count()
-            total_volume = Trade.objects.filter(room=room).aggregate(
-                total=Sum('total_value')
-            )['total'] or Decimal('0')
+#             # Get room statistics
+#             total_participants = RoomParticipant.objects.filter(room=room, is_active=True).count()
+#             total_trades = Trade.objects.filter(room=room).count()
+#             total_volume = Trade.objects.filter(room=room).aggregate(
+#                 total=Sum('total_value')
+#             )['total'] or Decimal('0')
 
-            # Get most active stocks
-            popular_stocks = Trade.objects.filter(room=room).values('symbol').annotate(
-                trade_count=models.Count('id'),
-                total_volume=Sum('total_value')
-            ).order_by('-trade_count')[:10]
+#             # Get most active stocks
+#             popular_stocks = Trade.objects.filter(room=room).values('symbol').annotate(
+#                 trade_count=models.Count('id'),
+#                 total_volume=Sum('total_value')
+#             ).order_by('-trade_count')[:10]
 
-            # Get top traders (only if admin)
-            top_traders = []
-            if is_admin:
-                leaderboard = trading_service.get_room_leaderboard(room)
-                top_traders = leaderboard[:5]  # Top 5 traders
+#             # Get top traders (only if admin)
+#             top_traders = []
+#             if is_admin:
+#                 leaderboard = trading_service.get_room_leaderboard(room)
+#                 top_traders = leaderboard[:5]  # Top 5 traders
 
-            return Response({
-                "room": {
-                    "id": room.id,
-                    "name": room.name,
-                    "is_closed": room.is_closed,
-                    "start_time": room.start_time,
-                    "end_time": room.end_time
-                },
-                "statistics": {
-                    "total_participants": total_participants,
-                    "total_trades": total_trades,
-                    "total_volume": str(total_volume),
-                    "popular_stocks": list(popular_stocks),
-                    "top_traders": top_traders if is_admin else []
-                },
-                "user_role": "admin" if is_admin else "participant"
-            }, status=status.HTTP_200_OK)
+#             return Response({
+#                 "room": {
+#                     "id": room.id,
+#                     "name": room.name,
+#                     "is_closed": room.is_closed,
+#                     "start_time": room.start_time,
+#                     "end_time": room.end_time
+#                 },
+#                 "statistics": {
+#                     "total_participants": total_participants,
+#                     "total_trades": total_trades,
+#                     "total_volume": str(total_volume),
+#                     "popular_stocks": list(popular_stocks),
+#                     "top_traders": top_traders if is_admin else []
+#                 },
+#                 "user_role": "admin" if is_admin else "participant"
+#             }, status=status.HTTP_200_OK)
 
-        except Exception as e:
-            return Response({
-                "error": f"An error occurred: {str(e)}"
-            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+#         except Exception as e:
+#             return Response({
+#                 "error": f"An error occurred: {str(e)}"
+#             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 
