@@ -816,7 +816,7 @@ class RoomTradeHistoryView(APIView):
         if not user:
             return Response({"User Not Found"})
         
-        trades = Trade.objects.filter(user=user, room=room).order_by("-trade_timestamp")
+        trades = Trade.objects.filter(user=user, room=room).order_by("timestamp")
         if not trades:
             return Response({"Trades Not Found"})
 
