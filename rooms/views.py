@@ -641,6 +641,90 @@ class RoomTradeSellView(APIView):
 class RoomLeaderboardView(APIView):
     permission_classes = [IsAuthenticated]
 
+    def get_stock_data(self, symbol):
+        """Fetch current stock price from IndianAPI"""
+        try:
+            base_url = "https://stock.indianapi.in/stock"
+            params = {'name': symbol}
+            headers = {
+                "X-Api-Key": settings.INDIANAPI_KEY,
+                "Content-Type": "application/json"
+            }
+
+            response = requests.get(base_url, headers=headers, params=params)
+            response.raise_for_status()
+            data = response.json()
+
+            if not data:
+                return None
+
+            current_price = data.get('currentPrice', {})
+            ltp = current_price.get('NSE') or current_price.get('BSE')
+            
+            if ltp is None:
+                return None
+
+            return float(ltp)
+        except Exception:
+            return None
+
+    def calculate_user_pnl(self, user, room):
+        """Calculate total P&L for a user in a room"""
+        try:
+            # Get user's portfolios
+            portfolios = UserPortfolio.objects.filter(
+                user=user,
+                room=room
+            )
+            
+            total_realized_pnl = Decimal('0.00')
+            total_unrealized_pnl = Decimal('0.00')
+            
+            for portfolio in portfolios:
+                # Add realized P&L
+                total_realized_pnl += portfolio.realized_pnl
+                
+                # Calculate unrealized P&L if user still holds stocks
+                if portfolio.total_quantity > 0:
+                    current_price = self.get_stock_data(portfolio.symbol)
+                    if current_price:
+                        current_price = Decimal(str(current_price))
+                        unrealized_pnl = portfolio.calculate_unrealized_pnl(current_price)
+                        total_unrealized_pnl += unrealized_pnl
+            
+            total_pnl = total_realized_pnl + total_unrealized_pnl
+            
+            # Get total trades count
+            total_trades = Trade.objects.filter(user=user, room=room).count()
+            
+            # Get user balance for net worth calculation
+            balance = UserBalance.objects.filter(user=user, room=room).first()
+            cash_balance = balance.available_cash_balance if balance else Decimal('100000.00')
+            
+            # Calculate current portfolio value
+            portfolio_value = Decimal('0.00')
+            for portfolio in portfolios.filter(total_quantity__gt=0):
+                current_price = self.get_stock_data(portfolio.symbol)
+                if current_price:
+                    portfolio_value += portfolio.total_quantity * Decimal(str(current_price))
+                else:
+                    portfolio_value += portfolio.total_quantity * portfolio.average_buy_price
+            
+            net_worth = cash_balance + portfolio_value
+            
+            return {
+                'total_pnl': total_pnl,
+                'realized_pnl': total_realized_pnl,
+                'unrealized_pnl': total_unrealized_pnl,
+                'total_trades': total_trades,
+                'net_worth': net_worth,
+                'cash_balance': cash_balance,
+                'portfolio_value': portfolio_value
+            }
+        except Exception as e:
+            logger.error(f"Error calculating P&L for user {user.username}: {e}")
+            return None
+
     def get(self, request, room_id):
         try:
             room = Room.objects.get(id=room_id)
@@ -650,16 +734,73 @@ class RoomLeaderboardView(APIView):
         check_and_close_room(room)
         now = timezone.now()
 
+        # Check if room is closed and user is not admin
         if room.end_time and now > room.end_time and request.user != room.admin:
             return Response({"error": "Room is closed. Only the admin can view the leaderboard."}, status=403)
 
-        # Use trading service to get leaderboard
-        leaderboard = trading_service.get_room_leaderboard(room)
+        # Get all participants in the room
+        participants = RoomParticipant.objects.filter(
+            room=room,
+            is_active=True
+        ).select_related('user')
+
+        leaderboard = []
+        starting_balance = Decimal('100000.00')  # Default starting balance
+
+        for participant in participants:
+            user_data = self.calculate_user_pnl(participant.user, room)
+            
+            if user_data:
+                # Calculate percentage return based on P&L
+                percentage_return = (user_data['total_pnl'] / starting_balance) * 100
+                
+                leaderboard.append({
+                    'username': participant.user.username,
+                    'user_id': participant.user.id,
+                    'total_pnl': float(user_data['total_pnl']),
+                    'realized_pnl': float(user_data['realized_pnl']),
+                    'unrealized_pnl': float(user_data['unrealized_pnl']),
+                    'net_worth': float(user_data['net_worth']),
+                    'cash_balance': float(user_data['cash_balance']),
+                    'portfolio_value': float(user_data['portfolio_value']),
+                    'total_trades': user_data['total_trades'],
+                    'percentage_return': float(percentage_return)
+                })
+
+        # Sort by total P&L (descending) - highest P&L first
+        leaderboard.sort(key=lambda x: x['total_pnl'], reverse=True)
+        
+        # Add ranks
+        for i, entry in enumerate(leaderboard):
+            entry['rank'] = i + 1
+            # Add position indicator
+            if entry['total_pnl'] > 0:
+                entry['position'] = 'profit'
+            elif entry['total_pnl'] < 0:
+                entry['position'] = 'loss'
+            else:
+                entry['position'] = 'neutral'
+
+        # Calculate room statistics
+        room_stats = {
+            'total_participants': len(leaderboard),
+            'profitable_traders': sum(1 for entry in leaderboard if entry['total_pnl'] > 0),
+            'loss_making_traders': sum(1 for entry in leaderboard if entry['total_pnl'] < 0),
+            'average_pnl': float(sum(entry['total_pnl'] for entry in leaderboard) / len(leaderboard)) if leaderboard else 0,
+            'total_trades': sum(entry['total_trades'] for entry in leaderboard)
+        }
 
         return Response({
-            "room": room.name,
-            "is_closed": room.is_closed,
-            "leaderboard": leaderboard
+            "room": {
+                "id": room.id,
+                "name": room.name,
+                "is_closed": room.is_closed,
+                "start_time": room.start_time,
+                "end_time": room.end_time
+            },
+            "room_statistics": room_stats,
+            "leaderboard": leaderboard,
+            "current_user_rank": next((entry['rank'] for entry in leaderboard if entry['user_id'] == request.user.id), None)
         }, status=200)
 
 class RoomTradeHistoryView(APIView):
