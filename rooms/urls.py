@@ -20,7 +20,6 @@ from .views import (
     UserPortfolioView,
     OrderHistoryView,
     CancelOrderView,
-    # BatchMarketDataView,
     PendingOrdersView,
     RoomStatsView,
     UserRoomsView,
