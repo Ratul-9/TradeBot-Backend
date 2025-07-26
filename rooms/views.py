@@ -424,7 +424,7 @@ class RoomTradeBuyView(APIView):
                 room=room,
                 symbol=symbol,
                 defaults={
-                    'stock_name': stock_name,  # Set stock name if creating new
+                    'stock_name': stock_name,  
                     'total_quantity': 0,
                     'average_buy_price': Decimal('0.00'),
                     'total_buy_value': Decimal('0.00')
@@ -1329,7 +1329,9 @@ class HistoricalDataView(APIView):
                 "5minute": ("minutes", "5"),
                 "15minute": ("minutes", "15"),
                 "30minute": ("minutes", "30"),
+                "1hour": ("hours", "1"),
                 "day": ("days", "1"),
+                "week": ("weeks", "1"),
                 "month": ("months", "1")
             }
 
