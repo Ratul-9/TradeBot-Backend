@@ -130,7 +130,6 @@ class SMEStock(models.Model):
         return f"{self.symbol} - {self.name_of_company} (SME)"
 
 class OrderBook(models.Model):
-    """Enhanced order tracking system"""
     BUY = 'BUY'
     SELL = 'SELL'
     ORDER_TYPE_CHOICES = [(BUY, 'Buy'), (SELL, 'Sell')]
@@ -286,7 +285,6 @@ class UserPortfolio(models.Model):
         return f"{self.user.username} - {self.symbol} in {self.room.name}: {self.total_quantity} shares @ {self.average_buy_price}"
 
 class Trade(models.Model):
-    """Enhanced trade execution records"""
     BUY = 'BUY'
     SELL = 'SELL'
     TRADE_TYPE_CHOICES = [(BUY, 'Buy'), (SELL, 'Sell')]
