@@ -203,9 +203,9 @@ class UserPortfolio(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE)
     room = models.ForeignKey(Room, on_delete=models.CASCADE)
     symbol = models.CharField(max_length=20)
-    stock_name = models.CharField(max_length=200, blank=True)  # Added for company name
+    stock_name = models.CharField(max_length=200, blank=True)
     total_quantity = models.IntegerField(default=0)
-    reserved_quantity = models.IntegerField(default=0)  # For pending sell orders
+    reserved_quantity = models.IntegerField(default=0)
     average_buy_price = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)
     total_buy_value = models.DecimalField(max_digits=15, decimal_places=2, default=0.00)
     total_sell_value = models.DecimalField(max_digits=15, decimal_places=2, default=0.00)
