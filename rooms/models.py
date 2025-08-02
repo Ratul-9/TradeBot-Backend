@@ -166,6 +166,9 @@ class OrderBook(models.Model):
     order_status = models.CharField(max_length=20, choices=ORDER_STATUS_CHOICES, default=PENDING)
     order_timestamp = models.DateTimeField(default=timezone.now)
     execution_timestamp = models.DateTimeField(null=True, blank=True)
+    has_stop_loss = models.BooleanField(default=False)
+    stop_loss_price = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    parent_order_id = models.ForeignKey('self', on_delete=models.CASCADE, null=True, blank=True)
     cancellation_timestamp = models.DateTimeField(null=True, blank=True)
     notes = models.TextField(blank=True, null=True)
 
@@ -272,6 +275,17 @@ class UserPortfolio(models.Model):
             self.save()
             return True
         return False
+    
+    def add_short_sell_transaction(self, quantity, price):
+        sale_value = quantity * price
+
+        cost_basis = quantity*self.average_buy_price
+        realized_pnl_for_sale = sale_value - cost_basis
+
+        self.total_sell_value += sale_value
+        self.realized_pnl += realized_pnl_for_sale
+
+        self.save()
 
     def calculate_unrealized_pnl(self, current_price):
         """Calculate unrealized P&L based on current market price"""
