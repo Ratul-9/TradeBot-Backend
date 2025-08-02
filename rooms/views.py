@@ -2082,3 +2082,189 @@ class UserBalanceView(APIView):
             return Response({
                 "error": f"An error occurred: {str(e)}"
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        
+
+class AdminUserRoomDetailsView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, room_id, user_id):
+        room = get_object_or_404(Room, id=room_id)
+        if request.user != room.admin:
+            return Response({"error": "Only the admin can view user details."}, status=403)
+
+        check_and_close_room(room)
+        if room.is_closed:
+            return Response({"error": "Room is closed. This view is only available during live sessions."}, status=403)
+
+        user = get_object_or_404(User, id=user_id)
+
+        # Get detailed holdings
+        portfolios = UserPortfolio.objects.filter(user=user, room=room, total_quantity__gt=0)
+        
+        holdings = []
+        total_portfolio_value = 0
+        
+        for portfolio in portfolios:
+            buy_value = portfolio.total_buy_value
+            total_portfolio_value += buy_value
+            
+            holdings.append({
+                "symbol": portfolio.symbol,
+                "quantity": portfolio.total_quantity,
+                "average_buy_price": str(portfolio.average_buy_price),
+                "total_buy_value": str(buy_value),
+            })
+
+        # Calculate basic portfolio summary from existing data
+        portfolio_summary = {
+            "total_holdings": len(holdings),
+            "total_invested": str(total_portfolio_value),
+        }
+
+        trades = Trade.objects.filter(user=user, room=room).order_by('-trade_timestamp')[:20]
+        trade_history = [
+            {
+                "symbol": trade.symbol,
+                "type": trade.trade_type,
+                "quantity": trade.quantity,
+                "price": str(trade.price),
+                "total_value": str(trade.total_value),
+                "timestamp": trade.trade_timestamp
+            }
+            for trade in trades
+        ]
+
+        return Response({
+            "username": user.username,
+            "portfolio_summary": portfolio_summary,
+            "stock_holdings": holdings,
+            "trade_history": trade_history,
+        }, status=200)
+    
+
+class PendingOrdersView(APIView):
+    """
+    View to get only pending orders for a user
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, room_id):
+        try:
+            room = Room.objects.filter(id=room_id).first()
+            if not room:
+                return Response({"error": "Room not found"}, status=status.HTTP_404_NOT_FOUND)
+
+            participant = RoomParticipant.objects.filter(
+                user=request.user, 
+                room=room, 
+                is_active=True
+            ).first()
+            if not participant:
+                return Response({
+                    "error": "You are not an active participant in this room"
+                }, status=status.HTTP_403_FORBIDDEN)
+
+            # Get only pending orders
+            pending_orders = OrderBook.objects.filter(
+                user=request.user, 
+                room=room, 
+                order_status=OrderBook.PENDING
+            ).order_by('-order_timestamp')
+
+            orders_data = []
+            for order in pending_orders:
+                orders_data.append({
+                    "id": order.id,
+                    "symbol": order.symbol,
+                    "order_type": order.order_type,
+                    "order_category": order.order_category,
+                    "quantity": order.quantity,
+                    "order_price": str(order.order_price),
+                    "order_timestamp": order.order_timestamp,
+                    "notes": order.notes
+                })
+
+            return Response({
+                "room": {
+                    "id": room.id,
+                    "name": room.name
+                },
+                "pending_orders": orders_data,
+                "count": len(orders_data)
+            }, status=status.HTTP_200_OK)
+
+        except Exception as e:
+            return Response({
+                "error": f"An error occurred: {str(e)}"
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+class CancelOrderView(APIView):
+    """
+    View to cancel pending orders
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, room_id, order_id):
+        try:
+            room = Room.objects.filter(id=room_id).first()
+            if not room:
+                return Response({"error": "Room not found"}, status=status.HTTP_404_NOT_FOUND)
+
+            participant = RoomParticipant.objects.filter(
+                user=request.user, 
+                room=room, 
+                is_active=True
+            ).first()
+            if not participant:
+                return Response({
+                    "error": "You are not an active participant in this room"
+                }, status=status.HTTP_403_FORBIDDEN)
+
+            # Get the order
+            try:
+                order = OrderBook.objects.get(id=order_id, user=request.user, room=room)
+            except OrderBook.DoesNotExist:
+                return Response({"error": "Order not found"}, status=status.HTTP_404_NOT_FOUND)
+
+            # Check if order can be cancelled
+            if order.status != 'PENDING':
+                return Response({
+                    "error": "Only pending orders can be cancelled"
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+            reason = request.data.get('reason', 'Cancelled by user')
+
+            # Cancel the order directly in the view
+            order.status = 'CANCELLED'
+            order.cancelled_at = timezone.now()
+            order.cancellation_reason = reason
+            order.save()
+
+            # If it was a buy order, return the locked funds to available balance
+            if order.order_type == 'BUY':
+                participant.locked_balance -= order.total_amount
+                participant.available_balance += order.total_amount
+                participant.save()
+
+            # If it was a sell order, return the locked quantity to available
+            elif order.order_type == 'SELL':
+                try:
+                    portfolio = UserPortfolio.objects.get(
+                        user=request.user,
+                        room=room,
+                        symbol=order.symbol
+                    )
+                    portfolio.locked_quantity -= order.quantity
+                    portfolio.save()
+                except UserPortfolio.DoesNotExist:
+                    # This shouldn't happen, but handle gracefully
+                    pass
+
+            return Response({
+                "message": f"Order cancelled successfully. Reason: {reason}"
+            }, status=status.HTTP_200_OK)
+
+        except Exception as e:
+            return Response({
+                "error": f"An error occurred: {str(e)}"
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

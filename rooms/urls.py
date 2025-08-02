@@ -8,7 +8,7 @@ from .views import (
     RoomTradeSellView,
     RoomLeaderboardView,
     RoomTradeHistoryView,
-    # AdminUserRoomDetailsView,
+    AdminUserRoomDetailsView,
     RoomCloseView,
     RoomByNameView,
     ParticipantView,
@@ -66,7 +66,7 @@ urlpatterns = [
     # User management
     path('users/me/', UserMeView.as_view(), name='user-me'),
     path('users/rooms/', UserRoomsView.as_view(), name='user-rooms'),
-    # path('<int:room_id>/user-details/<int:user_id>/', AdminUserRoomDetailsView.as_view(), name='admin-user-room-details'),
+    path('<int:room_id>/user-details/<int:user_id>/', AdminUserRoomDetailsView.as_view(), name='admin-user-room-details'),
     
     # Utility endpoints
     path('health/', HealthCheckView.as_view(), name='health-check'), #Working
