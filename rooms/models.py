@@ -302,7 +302,6 @@ class Trade(models.Model):
     BUY = 'BUY'
     SELL = 'SELL'
     TRADE_TYPE_CHOICES = [(BUY, 'Buy'), (SELL, 'Sell')]
-
     user = models.ForeignKey(User, on_delete=models.CASCADE)
     room = models.ForeignKey(Room, on_delete=models.CASCADE)
     order = models.ForeignKey(OrderBook, on_delete=models.CASCADE, related_name='executions', null=True, blank=True)

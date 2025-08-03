@@ -120,7 +120,7 @@ MIDDLEWARE = [
 CORS_ALLOW_ALL_ORIGINS = True
 
 ROOT_URLCONF = 'backend.urls'
-INDIANAPI_KEY = 'sk-live-gPpQQjBBkkTbcKAqXF73WI0ikYi37QRt9SGfSOHo'
+INDIANAPI_KEY = 'sk-live-0NiIIeHi0bNe1u0e65YUUpYCfo13rBh93BXfsVMP'
 TEMPLATES = [
     {
         'BACKEND': 'django.template.backends.django.DjangoTemplates',

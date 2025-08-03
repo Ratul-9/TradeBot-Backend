@@ -2197,7 +2197,7 @@ class AdminUserRoomDetailsView(APIView):
                     "quantity": trade.quantity,
                     "price": float(trade.price),
                     "total_value": float(trade.total_value),
-                    "timestamp": trade.trade_timestamp
+                    "timestamp": trade.timestamp
                 }
                 for trade in trades
             ]
