@@ -2087,59 +2087,139 @@ class UserBalanceView(APIView):
 class AdminUserRoomDetailsView(APIView):
     permission_classes = [IsAuthenticated]
 
-    def get(self, request, room_id, user_id):
-        room = get_object_or_404(Room, id=room_id)
-        if request.user != room.admin:
-            return Response({"error": "Only the admin can view user details."}, status=403)
-
-        check_and_close_room(room)
-        if room.is_closed:
-            return Response({"error": "Room is closed. This view is only available during live sessions."}, status=403)
-
-        user = get_object_or_404(User, id=user_id)
-
-        # Get detailed holdings
-        portfolios = UserPortfolio.objects.filter(user=user, room=room, total_quantity__gt=0)
-        
-        holdings = []
-        total_portfolio_value = 0
-        
-        for portfolio in portfolios:
-            buy_value = portfolio.total_buy_value
-            total_portfolio_value += buy_value
-            
-            holdings.append({
-                "symbol": portfolio.symbol,
-                "quantity": portfolio.total_quantity,
-                "average_buy_price": str(portfolio.average_buy_price),
-                "total_buy_value": str(buy_value),
-            })
-
-        # Calculate basic portfolio summary from existing data
-        portfolio_summary = {
-            "total_holdings": len(holdings),
-            "total_invested": str(total_portfolio_value),
-        }
-
-        trades = Trade.objects.filter(user=user, room=room).order_by('-trade_timestamp')[:20]
-        trade_history = [
-            {
-                "symbol": trade.symbol,
-                "type": trade.trade_type,
-                "quantity": trade.quantity,
-                "price": str(trade.price),
-                "total_value": str(trade.total_value),
-                "timestamp": trade.trade_timestamp
+    def get_stock_data(self, symbol):
+        try:
+            base_url = "https://stock.indianapi.in/stock"
+            params = {'name': symbol}
+            headers = {
+                "X-Api-Key": settings.INDIANAPI_KEY,
+                "Content-Type": "application/json"
             }
-            for trade in trades
-        ]
 
-        return Response({
-            "username": user.username,
-            "portfolio_summary": portfolio_summary,
-            "stock_holdings": holdings,
-            "trade_history": trade_history,
-        }, status=200)
+            response = requests.get(base_url, headers=headers, params=params)
+            response.raise_for_status()
+            data = response.json()
+
+            current_price = data.get('currentPrice', {}).get('NSE') or data.get('currentPrice', {}).get('BSE')
+            return float(current_price) if current_price else None
+        except Exception:
+            return None
+
+    def get(self, request, room_id, user_id):
+        try:
+            # Validate room
+            room = Room.objects.filter(id=room_id).first()
+            if not room:
+                return Response({"error": "Room not found"}, status=status.HTTP_404_NOT_FOUND)
+
+            # Check if request.user is admin
+            if room.admin != request.user:
+                return Response({"error": "Only the admin can view user details."}, status=status.HTTP_403_FORBIDDEN)
+
+            # Check and close room if expired
+            check_and_close_room(room)
+            now = timezone.now()
+
+            if room.is_closed:
+                return Response({"error": "Room is closed, no more trades allowed"}, status=status.HTTP_403_FORBIDDEN)
+
+            if not (room.start_time and room.end_time and room.start_time <= now <= room.end_time):
+                return Response({"error": "Room is not active yet"}, status=status.HTTP_403_FORBIDDEN)
+
+            # Validate user exists
+            user = get_object_or_404(User, id=user_id)
+
+            # Check if user is an active participant
+            participant = RoomParticipant.objects.filter(user=user, room=room, is_active=True).first()
+            if not participant:
+                return Response({"error": "User is not an active participant in this room"}, status=status.HTTP_403_FORBIDDEN)
+
+            portfolios = UserPortfolio.objects.filter(user=user, room=room).exclude(total_quantity=0)
+
+            total_investment = Decimal('0.00')
+            total_current_value = Decimal('0.00')
+            total_realized_pnl = Decimal('0.00')
+            total_unrealized_pnl = Decimal('0.00')
+            holdings = []
+
+            for portfolio in portfolios:
+                current_price = self.get_stock_data(portfolio.symbol) or float(portfolio.average_buy_price)
+                current_price = Decimal(str(current_price))
+
+                investment = portfolio.total_buy_value - portfolio.total_sell_value
+                current_value = portfolio.total_quantity * current_price
+                unrealized_pnl = portfolio.calculate_unrealized_pnl(current_price)
+
+                total_investment += investment
+                total_current_value += current_value
+                total_realized_pnl += portfolio.realized_pnl
+                total_unrealized_pnl += unrealized_pnl
+
+                holdings.append({
+                    "symbol": portfolio.symbol,
+                    "stock_name": portfolio.stock_name,
+                    "quantity": portfolio.total_quantity,
+                    "available_quantity": portfolio.available_quantity,
+                    "average_buy_price": float(portfolio.average_buy_price),
+                    "current_price": float(current_price),
+                    "total_investment": float(investment),
+                    "current_value": float(current_value),
+                    "unrealized_pnl": float(unrealized_pnl),
+                    "realized_pnl": float(portfolio.realized_pnl),
+                    "pnl_percentage": float(((current_value - investment) / investment * 100) if investment > 0 else 0)
+                })
+
+            total_pnl = total_realized_pnl + total_unrealized_pnl
+            overall_pnl_percentage = float(((total_current_value - total_investment) / total_investment * 100) if total_investment > 0 else 0)
+
+            portfolio_summary = {
+                "total_investment": float(total_investment),
+                "current_value": float(total_current_value),
+                "total_realized_pnl": float(total_realized_pnl),
+                "total_unrealized_pnl": float(total_unrealized_pnl),
+                "total_pnl": float(total_pnl),
+                "overall_pnl_percentage": overall_pnl_percentage,
+                "total_holdings": len(holdings)
+            }
+
+            # Get balance
+            balance = UserBalance.objects.filter(user=user, room=room).first()
+            if balance:
+                portfolio_summary["available_cash"] = float(balance.available_cash_balance)
+                portfolio_summary["total_portfolio_value"] = float(balance.available_cash_balance + total_current_value)
+
+            # Trade history
+            trades = Trade.objects.filter(user=user, room=room).order_by('-trade_timestamp')[:20]
+            trade_history = [
+                {
+                    "symbol": trade.symbol,
+                    "type": trade.trade_type,
+                    "quantity": trade.quantity,
+                    "price": float(trade.price),
+                    "total_value": float(trade.total_value),
+                    "timestamp": trade.trade_timestamp
+                }
+                for trade in trades
+            ]
+
+            return Response({
+                "user": {
+                    "id": user.id,
+                    "username": user.username
+                },
+                "room": {
+                    "id": room.id,
+                    "name": room.name,
+                    "is_active": not room.is_closed
+                },
+                "portfolio_summary": portfolio_summary,
+                "holdings": holdings,
+                "trade_history": trade_history
+            }, status=status.HTTP_200_OK)
+
+        except Exception as e:
+            return Response({"error": f"An error occurred: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
     
 
 class PendingOrdersView(APIView):
