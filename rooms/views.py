@@ -2105,7 +2105,7 @@ class AdminUserRoomDetailsView(APIView):
         except Exception:
             return None
 
-    def get(self, request, room_id, user_id):
+    def get(self, request, room_id, username):
         try:
             # Validate room
             room = Room.objects.filter(id=room_id).first()
@@ -2126,8 +2126,8 @@ class AdminUserRoomDetailsView(APIView):
             if not (room.start_time and room.end_time and room.start_time <= now <= room.end_time):
                 return Response({"error": "Room is not active yet"}, status=status.HTTP_403_FORBIDDEN)
 
-            # Validate user exists
-            user = get_object_or_404(User, id=user_id)
+            # Validate user exists by username
+            user = get_object_or_404(User, username=username)
 
             # Check if user is an active participant
             participant = RoomParticipant.objects.filter(user=user, room=room, is_active=True).first()
@@ -2219,7 +2219,6 @@ class AdminUserRoomDetailsView(APIView):
 
         except Exception as e:
             return Response({"error": f"An error occurred: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
     
 
 class PendingOrdersView(APIView):

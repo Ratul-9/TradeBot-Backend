@@ -19,7 +19,7 @@ from .views import (
     UserPortfolioView,
     OrderHistoryView,
     # CancelOrderView,
-    # PendingOrdersView,
+    PendingOrdersView,
     RoomStatsView,
     UserRoomsView,
     # PlaceLimitOrderView,
@@ -52,7 +52,7 @@ urlpatterns = [
     # Portfolio and orders
     path('<int:room_id>/portfolio/', UserPortfolioView.as_view(), name='user-portfolio'), #Working
     path('<int:room_id>/orders/', OrderHistoryView.as_view(), name='order-history'), #Working
-    # path('<int:room_id>/pending-orders/', PendingOrdersView.as_view(), name='pending-orders'),
+    path('<int:room_id>/pending-orders/', PendingOrdersView.as_view(), name='pending-orders'),
     # path('<int:room_id>/orders/<int:order_id>/cancel/', CancelOrderView.as_view(), name='cancel-order'),
     
     # Market data
@@ -66,7 +66,7 @@ urlpatterns = [
     # User management
     path('users/me/', UserMeView.as_view(), name='user-me'),
     path('users/rooms/', UserRoomsView.as_view(), name='user-rooms'),
-    path('<int:room_id>/user-details/<int:user_id>/', AdminUserRoomDetailsView.as_view(), name='admin-user-room-details'),
+    path('<int:room_id>/user-details/<str:username>/', AdminUserRoomDetailsView.as_view(), name='admin-user-room-details'),
     
     # Utility endpoints
     path('health/', HealthCheckView.as_view(), name='health-check'), #Working
