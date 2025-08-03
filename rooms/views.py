@@ -2189,7 +2189,7 @@ class AdminUserRoomDetailsView(APIView):
                 portfolio_summary["total_portfolio_value"] = float(balance.available_cash_balance + total_current_value)
 
             # Trade history
-            trades = Trade.objects.filter(user=user, room=room).order_by('-trade_timestamp')[:20]
+            trades = Trade.objects.filter(user=user, room=room).order_by('-timestamp')[:20]
             trade_history = [
                 {
                     "symbol": trade.symbol,
