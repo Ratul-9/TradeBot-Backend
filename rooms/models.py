@@ -161,7 +161,7 @@ class OrderBook(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE)
     room = models.ForeignKey(Room, on_delete=models.CASCADE)
     order_type = models.CharField(max_length=4, choices=ORDER_TYPE_CHOICES)
-    order_category = models.CharField(max_length=10, choices=ORDER_CATEGORY_CHOICES, default=MARKET)
+    order_category = models.CharField(max_length=20, choices=ORDER_CATEGORY_CHOICES, default=MARKET)
     symbol = models.CharField(max_length=20)
     quantity = models.PositiveIntegerField()
     filled_quantity = models.PositiveIntegerField(default=0)
