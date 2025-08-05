@@ -246,7 +246,7 @@ AWS_DEFAULT_ACL =  None
 AWS_S3_VERITY = True
 DEFAULT_FILE_STORAGE = 'storages.backends.s3boto3.S3Boto3Storage'
 
-CELERY_BROKER_URL = 'master.tradebot-cache.qgc5pa.aps1.cache.amazonaws.com:6379'
+CELERY_BROKER_URL = 'redis://master.tradebot-cache.qgc5pa.aps1.cache.amazonaws.com:6379'
 CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TAKS_SERIALIZER = 'json'
 
