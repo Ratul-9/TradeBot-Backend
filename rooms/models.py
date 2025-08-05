@@ -155,7 +155,6 @@ class OrderBook(models.Model):
         (LIMIT, 'Limit Order'),
         (STOP_LOSS, 'Stop Loss Order'),
         ('STOP_LOSS_LIMIT', 'Stop Loss Limit'),
-
     ]
 
     user = models.ForeignKey(User, on_delete=models.CASCADE)
@@ -175,8 +174,7 @@ class OrderBook(models.Model):
     stop_loss_limit_price = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
     parent_order_id = models.ForeignKey('self', on_delete=models.CASCADE, null=True, blank=True)
     is_short_sell = models.BooleanField(default=False)
-    partially_filled_quantity = models.IntegerField(default=0)
-    partially_executed_quantity = models.IntegerField(default=0)
+    partially_executed_quantity = models.IntegerField(default=0)  # Removed duplicate 'partially_filled_quantity'
     remaining_quantity = models.IntegerField(default=0)
     cancellation_timestamp = models.DateTimeField(null=True, blank=True)
     notes = models.TextField(blank=True, null=True)
@@ -190,7 +188,7 @@ class OrderBook(models.Model):
         ]
 
     @property
-    def remaining_quantity(self):
+    def calculated_remaining_quantity(self):  # Renamed to avoid conflict with the field
         return self.quantity - self.filled_quantity
 
     @property
@@ -206,20 +204,6 @@ class OrderBook(models.Model):
         if self.executed_price and self.filled_quantity:
             return self.filled_quantity * self.executed_price
         return Decimal('0.00')
-
-    def remove_sell_transaction(self, sell_quantity):
-        """Remove quantity from portfolio when selling"""
-        if self.total_quantity >= sell_quantity:
-            self.total_quantity -= sell_quantity
-            if self.total_quantity == 0:
-                self.average_buy_price = Decimal('0.00')
-                self.total_buy_value = Decimal('0.00')
-        else:
-            raise ValueError("Cannot sell more than available quantity")
-
-    @property
-    def remaining_quantity_calculated(self):
-        return self.quantity - self.filled_quantity
 
     def __str__(self):
         return f"Order {self.id}: {self.order_type} {self.quantity} {self.symbol} @ {self.order_price} - {self.order_status}"
