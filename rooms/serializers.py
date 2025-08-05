@@ -223,3 +223,23 @@ class BulkTradeSerializer(serializers.Serializer):
         if len(value) > 10:
             raise serializers.ValidationError("Cannot place more than 10 orders at once")
         return value
+    
+class OrderResponseSerializer(serializers.ModelSerializer):
+    """Serializer for order responses"""
+    
+    class Meta:
+        model = OrderBook
+        fields = [
+            'id', 'symbol', 'quantity', 'order_price', 'order_category',
+            'order_status', 'executed_price', 'execution_timestamp',
+            'has_stop_loss', 'stop_loss_trigger_price', 'stop_loss_limit_price',
+            'parent_order_id'
+        ]
+    
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        # Convert Decimal fields to float for JSON serialization
+        for field in ['order_price', 'executed_price', 'stop_loss_trigger_price', 'stop_loss_limit_price']:
+            if data.get(field) is not None:
+                data[field] = float(data[field])
+        return data

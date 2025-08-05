@@ -318,8 +318,8 @@ class RoomTradeBuyView(APIView):
         except Exception:
             return None
 
-    def create_stop_loss_order(self, user, room, symbol, quantity, stop_loss_price, stock_name, original_order_id):
-        """Create a stop loss sell order"""
+    def create_stop_loss_order(self, user, room, symbol, quantity, stop_loss_trigger_price, stop_loss_limit_price, stock_name, original_order_id):
+        """Create a stop loss sell order with trigger and limit price"""
         try:
             stop_loss_order = OrderBook.objects.create(
                 user=user,
@@ -327,19 +327,78 @@ class RoomTradeBuyView(APIView):
                 order_type=OrderBook.SELL,
                 symbol=symbol,
                 quantity=quantity,
-                order_price=stop_loss_price,
-                order_category=OrderBook.STOP_LOSS,  # You'll need to add this to your OrderBook model
+                order_price=stop_loss_limit_price,  # This is the limit price for execution
+                order_category=OrderBook.STOP_LOSS_LIMIT,  # New category
                 order_status=OrderBook.PENDING,
                 executed_price=None,
                 execution_timestamp=None,
-                parent_order_id=original_order_id,  # Link to the original buy order
-                stop_loss_price=stop_loss_price  # You'll need to add this field to your OrderBook model
+                parent_order_id=original_order_id,
+                stop_loss_trigger_price=stop_loss_trigger_price,  # Trigger price
+                stop_loss_limit_price=stop_loss_limit_price  # Limit price for execution
             )
             return stop_loss_order
         except Exception as e:
-            # Log the error for debugging
             print(f"Error creating stop loss order: {str(e)}")
             return None
+
+    def execute_partial_buy_order(self, user, room, symbol, quantity, execution_price, stock_name, balance, original_order=None):
+        """Execute a partial buy order and update portfolio"""
+        try:
+            cost = execution_price * Decimal(quantity)
+            
+            # Execute the cash reservation
+            if not balance.execute_cash_reservation(cost):
+                return None, None
+            
+            # Create executed order
+            executed_order = OrderBook.objects.create(
+                user=user,
+                room=room,
+                order_type=OrderBook.BUY,
+                symbol=symbol,
+                quantity=quantity,
+                order_price=execution_price,
+                order_category=OrderBook.MARKET if not original_order else original_order.order_category,
+                order_status=OrderBook.EXECUTED,
+                executed_price=execution_price,
+                execution_timestamp=timezone.now(),
+                parent_order_id=original_order.id if original_order else None
+            )
+            
+            # Update portfolio
+            portfolio, created = UserPortfolio.objects.get_or_create(
+                user=user,
+                room=room,
+                symbol=symbol,
+                defaults={
+                    'stock_name': stock_name,
+                    'total_quantity': 0,
+                    'average_buy_price': Decimal('0.00'),
+                    'total_buy_value': Decimal('0.00')
+                }
+            )
+            if not created:
+                portfolio.stock_name = stock_name
+            portfolio.add_buy_transaction(quantity, execution_price)
+            portfolio.save()
+            
+            # Create trade record
+            trade = Trade.objects.create(
+                user=user,
+                room=room,
+                order=executed_order,
+                trade_type=Trade.BUY,
+                symbol=symbol,
+                quantity=quantity,
+                price=execution_price,
+                total_value=cost
+            )
+            
+            return executed_order, trade
+            
+        except Exception as e:
+            print(f"Error executing partial buy order: {str(e)}")
+            return None, None
 
     def post(self, request, room_id):
         try:
@@ -370,9 +429,10 @@ class RoomTradeBuyView(APIView):
             quantity = int(data.get("quantity", 0))
             order_category = data.get("order_category", "").strip().upper()
             
-            # New stop loss fields
+            # Enhanced stop loss fields
             has_stop_loss = data.get("has_stop_loss", False)
-            stop_loss_price = data.get("stop_loss_price")
+            stop_loss_trigger_price = data.get("stop_loss_trigger_price")  # Renamed from stop_loss_price
+            stop_loss_limit_price = data.get("stop_loss_limit_price")  # New field
 
             if not symbol or quantity <= 0:
                 return Response({"error": "Invalid input: symbol and positive quantity are required"}, status=status.HTTP_400_BAD_REQUEST)
@@ -382,55 +442,70 @@ class RoomTradeBuyView(APIView):
 
             # Validate stop loss if provided
             if has_stop_loss:
-                if not stop_loss_price:
-                    return Response({"error": "Stop loss price is required when stop loss is enabled"}, status=status.HTTP_400_BAD_REQUEST)
-                
-                try:
-                    stop_loss_price = Decimal(str(stop_loss_price))
-                    if stop_loss_price <= 0:
-                        return Response({"error": "Stop loss price must be greater than 0"}, status=status.HTTP_400_BAD_REQUEST)
-                except (ValueError, TypeError, InvalidOperation):
-                    return Response({"error": "Invalid stop loss price format"}, status=status.HTTP_400_BAD_REQUEST)
-            
-            if order_category == "MARKET":
-                stock_exists = Stock.objects.filter(symbol=symbol).exists()
-                sme_exists = SMEStock.objects.filter(symbol=symbol).exists()
-
-                if not (stock_exists or sme_exists):
+                if not stop_loss_trigger_price or not stop_loss_limit_price:
                     return Response({
-                        "error": f"Symbol '{symbol}' not found in our database"
-                    }, status=status.HTTP_404_NOT_FOUND)
-
-                # Get stock name and fetch current market price
-                stock_name = self.get_stock_name(symbol)
-                if not stock_name:
-                    return Response({"error": "Stock name not found"}, status=status.HTTP_404_NOT_FOUND)
-                
-                stock_data = self.get_indianapi_stock_data(symbol)
-                if not stock_data or not stock_data.get('ltp'):
-                    return Response({
-                        "error": "Unable to fetch current market price. Please try again later."
-                    }, status=status.HTTP_503_SERVICE_UNAVAILABLE)
-
-                current_price = Decimal(str(stock_data['ltp']))
-                
-                # Validate stop loss price against current price for buy orders
-                if has_stop_loss and stop_loss_price >= current_price:
-                    return Response({
-                        "error": "Stop loss price must be below the current market price for buy orders"
+                        "error": "Both stop loss trigger price and limit price are required when stop loss is enabled"
                     }, status=status.HTTP_400_BAD_REQUEST)
                 
-                total_cost = current_price * Decimal(quantity)  # Use Decimal for precision
+                try:
+                    stop_loss_trigger_price = Decimal(str(stop_loss_trigger_price))
+                    stop_loss_limit_price = Decimal(str(stop_loss_limit_price))
+                    
+                    if stop_loss_trigger_price <= 0 or stop_loss_limit_price <= 0:
+                        return Response({
+                            "error": "Stop loss prices must be greater than 0"
+                        }, status=status.HTTP_400_BAD_REQUEST)
+                    
+                    if stop_loss_limit_price > stop_loss_trigger_price:
+                        return Response({
+                            "error": "Stop loss limit price must be less than or equal to trigger price"
+                        }, status=status.HTTP_400_BAD_REQUEST)
+                        
+                except (ValueError, TypeError, InvalidOperation):
+                    return Response({
+                        "error": "Invalid stop loss price format"
+                    }, status=status.HTTP_400_BAD_REQUEST)
+            
+            # Check if symbol exists
+            stock_exists = Stock.objects.filter(symbol=symbol).exists()
+            sme_exists = SMEStock.objects.filter(symbol=symbol).exists()
+            if not (stock_exists or sme_exists):
+                return Response({
+                    "error": f"Symbol '{symbol}' not found in our database"
+                }, status=status.HTTP_404_NOT_FOUND)
 
-                # Fetch or create user's balance for this room
-                balance, created = UserBalance.objects.get_or_create(
-                    user=user,
-                    room=room,
-                    defaults={
-                        'total_cash_balance': Decimal('100000.00'),
-                        'reserved_cash_balance': Decimal('0.00')
-                    }
-                )
+            # Get stock name
+            stock_name = self.get_stock_name(symbol)
+            if not stock_name:
+                return Response({"error": "Stock name not found"}, status=status.HTTP_404_NOT_FOUND)
+            
+            # Get current market price for all order types
+            stock_data = self.get_indianapi_stock_data(symbol)
+            if not stock_data or not stock_data.get('ltp'):
+                return Response({
+                    "error": "Unable to fetch current market price. Please try again later."
+                }, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+
+            current_ltp = Decimal(str(stock_data['ltp']))
+            
+            # Get or create user balance
+            balance, created = UserBalance.objects.get_or_create(
+                user=user,
+                room=room,
+                defaults={
+                    'total_cash_balance': Decimal('100000.00'),
+                    'reserved_cash_balance': Decimal('0.00')
+                }
+            )
+            
+            if order_category == "MARKET":
+                # Validate stop loss price against current price for buy orders
+                if has_stop_loss and stop_loss_trigger_price >= current_ltp:
+                    return Response({
+                        "error": "Stop loss trigger price must be below the current market price for buy orders"
+                    }, status=status.HTTP_400_BAD_REQUEST)
+                
+                total_cost = current_ltp * Decimal(quantity)
 
                 # Check if user has sufficient available balance
                 if balance.available_cash_balance < total_cost:
@@ -440,15 +515,13 @@ class RoomTradeBuyView(APIView):
                         "available": float(balance.available_cash_balance)
                     }, status=status.HTTP_400_BAD_REQUEST)
 
-                # Reserve the cash for the buy order
+                # Reserve and execute the cash
                 if not balance.reserve_cash(total_cost):
                     return Response({
                         "error": "Failed to reserve cash for the order"
                     }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-                # Execute the reservation (deduct from total balance) since it's a market order
                 if not balance.execute_cash_reservation(total_cost):
-                    # If execution fails, release the reservation to rollback
                     balance.release_cash_reservation(total_cost)
                     return Response({
                         "error": "Failed to execute cash deduction"
@@ -461,13 +534,14 @@ class RoomTradeBuyView(APIView):
                     order_type=OrderBook.BUY,
                     symbol=symbol,
                     quantity=quantity,
-                    order_price=current_price,
+                    order_price=current_ltp,
                     order_category=OrderBook.MARKET,
                     order_status=OrderBook.EXECUTED, 
-                    executed_price=current_price,
+                    executed_price=current_ltp,
                     execution_timestamp=timezone.now(),
                     has_stop_loss=has_stop_loss,
-                    stop_loss_price=stop_loss_price if has_stop_loss else None
+                    stop_loss_trigger_price=stop_loss_trigger_price if has_stop_loss else None,
+                    stop_loss_limit_price=stop_loss_limit_price if has_stop_loss else None
                 )
 
                 # Create stop loss order if requested
@@ -478,17 +552,16 @@ class RoomTradeBuyView(APIView):
                         room=room,
                         symbol=symbol,
                         quantity=quantity,
-                        stop_loss_price=stop_loss_price,
+                        stop_loss_trigger_price=stop_loss_trigger_price,
+                        stop_loss_limit_price=stop_loss_limit_price,
                         stock_name=stock_name,
                         original_order_id=order.id
                     )
                     
                     if not stop_loss_order:
-                        # If stop loss creation fails, you might want to handle this
-                        # For now, we'll continue but log the issue
                         print(f"Warning: Failed to create stop loss order for order {order.id}")
 
-                # Update or create portfolio entry
+                # Update portfolio
                 portfolio, created = UserPortfolio.objects.get_or_create(
                     user=user,
                     room=room,
@@ -501,9 +574,9 @@ class RoomTradeBuyView(APIView):
                     }
                 )
                 if not created:
-                    portfolio.stock_name = stock_name  # Update stock name if already exists
-                portfolio.add_buy_transaction(quantity, current_price)
-                portfolio.save()  # Ensure save after update
+                    portfolio.stock_name = stock_name
+                portfolio.add_buy_transaction(quantity, current_ltp)
+                portfolio.save()
 
                 # Create trade record
                 trade = Trade.objects.create(
@@ -513,7 +586,7 @@ class RoomTradeBuyView(APIView):
                     trade_type=Trade.BUY,
                     symbol=symbol,
                     quantity=quantity,
-                    price=current_price,
+                    price=current_ltp,
                     total_value=total_cost
                 )
 
@@ -524,16 +597,16 @@ class RoomTradeBuyView(APIView):
                     "trade_id": trade.id,
                     "symbol": symbol,
                     "quantity": quantity,
-                    "executed_price": float(current_price),
+                    "executed_price": float(current_ltp),
                     "total_cost": float(total_cost),
                     "remaining_balance": float(balance.available_cash_balance)
                 }
 
-                # Add stop loss information to response if applicable
                 if has_stop_loss:
                     response_data.update({
                         "stop_loss_enabled": True,
-                        "stop_loss_price": float(stop_loss_price),
+                        "stop_loss_trigger_price": float(stop_loss_trigger_price),
+                        "stop_loss_limit_price": float(stop_loss_limit_price),
                         "stop_loss_order_id": stop_loss_order.id if stop_loss_order else None
                     })
 
@@ -546,86 +619,159 @@ class RoomTradeBuyView(APIView):
                     if limit_price <= 0:
                         return Response({"error": "Limit price must be greater than 0"}, status=status.HTTP_400_BAD_REQUEST)
                 except (ValueError, TypeError, InvalidOperation):
-                        return Response({"error": "Invalid limit price format"}, status=status.HTTP_400_BAD_REQUEST)
+                    return Response({"error": "Invalid limit price format"}, status=status.HTTP_400_BAD_REQUEST)
                 
                 # Validate stop loss price against limit price for limit orders
-                if has_stop_loss and stop_loss_price >= limit_price:
+                if has_stop_loss and stop_loss_trigger_price >= limit_price:
                     return Response({
-                        "error": "Stop loss price must be below the limit price for buy orders"
+                        "error": "Stop loss trigger price must be below the limit price for buy orders"
                     }, status=status.HTTP_400_BAD_REQUEST)
                 
-                stock_exists = Stock.objects.filter(symbol=symbol).exists()
-                sme_exists = SMEStock.objects.filter(symbol=symbol).exists()
-                if not (stock_exists or sme_exists):
-                    return Response({"error": f"Symbol '{symbol}' not found in our database"}, status=status.HTTP_404_NOT_FOUND)
+                total_limit_cost = limit_price * Decimal(quantity)
 
-                # Get stock name
-                stock_name = self.get_stock_name(symbol)
-                if not stock_name:
-                    return Response({"error": "Stock name not found"}, status=status.HTTP_404_NOT_FOUND)
-                
-                total_cost = limit_price * Decimal(quantity)
-
-                balance, created = UserBalance.objects.get_or_create(
-                    user=user,
-                    room=room,
-                    defaults={
-                        'total_cash_balance': Decimal('100000.00'),
-                        'reserved_cash_balance': Decimal('0.00')
-                    }
-                )
-
-                if balance.available_cash_balance < total_cost:
+                if balance.available_cash_balance < total_limit_cost:
                     return Response({
                         "error": "Insufficient balance",
-                        "required": float(total_cost),
+                        "required": float(total_limit_cost),
                         "available": float(balance.available_cash_balance)
                     }, status=status.HTTP_400_BAD_REQUEST)
 
-                # Reserve the cash for the limit order (but don't execute yet)
-                if not balance.reserve_cash(total_cost):
-                    return Response({
-                        "error": "Failed to reserve cash for the order"
-                    }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+                # NEW LOGIC: Check if limit price >= current LTP
+                if limit_price >= current_ltp:
+                    # Immediate partial execution at current LTP
+                    executable_quantity = min(quantity, int(balance.available_cash_balance / current_ltp))
+                    immediate_cost = current_ltp * Decimal(executable_quantity)
+                    remaining_quantity = quantity - executable_quantity
+                    
+                    # Reserve total limit cost first
+                    if not balance.reserve_cash(total_limit_cost):
+                        return Response({
+                            "error": "Failed to reserve cash for the order"
+                        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+                    
+                    # Execute immediate portion
+                    executed_order = None
+                    trade = None
+                    if executable_quantity > 0:
+                        executed_order, trade = self.execute_partial_buy_order(
+                            user, room, symbol, executable_quantity, current_ltp, stock_name, balance
+                        )
+                        
+                        if not executed_order:
+                            balance.release_cash_reservation(total_limit_cost)
+                            return Response({
+                                "error": "Failed to execute immediate portion of the order"
+                            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+                    
+                    # Create pending order for remaining quantity (if any)
+                    pending_order = None
+                    if remaining_quantity > 0:
+                        pending_order = OrderBook.objects.create(
+                            user=user,
+                            room=room,
+                            order_type=OrderBook.BUY,
+                            symbol=symbol,
+                            quantity=remaining_quantity,
+                            order_price=limit_price,
+                            order_category=OrderBook.LIMIT,
+                            order_status=OrderBook.PENDING,
+                            executed_price=None,
+                            execution_timestamp=None,
+                            has_stop_loss=has_stop_loss,
+                            stop_loss_trigger_price=stop_loss_trigger_price if has_stop_loss else None,
+                            stop_loss_limit_price=stop_loss_limit_price if has_stop_loss else None,
+                            parent_order_id=executed_order.id if executed_order else None
+                        )
+                    
+                    # Create stop loss order for executed quantity only
+                    stop_loss_order = None
+                    if has_stop_loss and executed_order:
+                        stop_loss_order = self.create_stop_loss_order(
+                            user=user,
+                            room=room,
+                            symbol=symbol,
+                            quantity=executable_quantity,
+                            stop_loss_trigger_price=stop_loss_trigger_price,
+                            stop_loss_limit_price=stop_loss_limit_price,
+                            stock_name=stock_name,
+                            original_order_id=executed_order.id
+                        )
+                    
+                    response_data = {
+                        "success": True,
+                        "message": f"Limit order partially executed: {executable_quantity} shares at market price, {remaining_quantity} shares pending at limit price",
+                        "executed_order_id": executed_order.id if executed_order else None,
+                        "pending_order_id": pending_order.id if pending_order else None,
+                        "trade_id": trade.id if trade else None,
+                        "symbol": symbol,
+                        "total_quantity": quantity,
+                        "executed_quantity": executable_quantity,
+                        "pending_quantity": remaining_quantity,
+                        "executed_price": float(current_ltp) if executed_order else None,
+                        "limit_price": float(limit_price),
+                        "immediate_cost": float(immediate_cost) if executed_order else 0,
+                        "remaining_balance": float(balance.available_cash_balance)
+                    }
+                    
+                    if has_stop_loss and executed_order:
+                        response_data.update({
+                            "stop_loss_enabled": True,
+                            "stop_loss_trigger_price": float(stop_loss_trigger_price),
+                            "stop_loss_limit_price": float(stop_loss_limit_price),
+                            "stop_loss_order_id": stop_loss_order.id if stop_loss_order else None,
+                            "stop_loss_note": "Stop loss created for executed quantity only"
+                        })
+                    
+                    return Response(response_data, status=status.HTTP_201_CREATED)
                 
-                order = OrderBook.objects.create(
-                    user=user,
-                    room=room,
-                    order_type=OrderBook.BUY,
-                    symbol=symbol,
-                    quantity=quantity,
-                    order_price=limit_price,
-                    order_category=OrderBook.LIMIT,
-                    order_status=OrderBook.PENDING, 
-                    executed_price=None,
-                    execution_timestamp=None,
-                    has_stop_loss=has_stop_loss,
-                    stop_loss_price=stop_loss_price if has_stop_loss else None
-                )
+                else:
+                    # Traditional limit order logic (limit_price < current_ltp)
+                    # Reserve the cash for the limit order (but don't execute yet)
+                    if not balance.reserve_cash(total_limit_cost):
+                        return Response({
+                            "error": "Failed to reserve cash for the order"
+                        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+                    
+                    order = OrderBook.objects.create(
+                        user=user,
+                        room=room,
+                        order_type=OrderBook.BUY,
+                        symbol=symbol,
+                        quantity=quantity,
+                        order_price=limit_price,
+                        order_category=OrderBook.LIMIT,
+                        order_status=OrderBook.PENDING, 
+                        executed_price=None,
+                        execution_timestamp=None,
+                        has_stop_loss=has_stop_loss,
+                        stop_loss_trigger_price=stop_loss_trigger_price if has_stop_loss else None,
+                        stop_loss_limit_price=stop_loss_limit_price if has_stop_loss else None
+                    )
 
-                response_data = {
-                    "success": True,
-                    "message": "Limit buy order placed successfully",
-                    "order_id": order.id,
-                    "symbol": symbol,
-                    "quantity": quantity,
-                    "limit_price": float(limit_price),
-                    "total_cost": float(total_cost),
-                    "order_status": "PENDING",
-                    "remaining_balance": float(balance.available_cash_balance)
-                }
+                    response_data = {
+                        "success": True,
+                        "message": "Limit buy order placed successfully",
+                        "order_id": order.id,
+                        "symbol": symbol,
+                        "quantity": quantity,
+                        "limit_price": float(limit_price),
+                        "total_cost": float(total_limit_cost),
+                        "order_status": "PENDING",
+                        "remaining_balance": float(balance.available_cash_balance)
+                    }
 
-                # Add stop loss information to response if applicable
-                if has_stop_loss:
-                    response_data.update({
-                        "stop_loss_enabled": True,
-                        "stop_loss_price": float(stop_loss_price),
-                        "message": "Limit buy order placed successfully with stop loss. Stop loss order will be created when the buy order is executed."
-                    })
+                    if has_stop_loss:
+                        response_data.update({
+                            "stop_loss_enabled": True,
+                            "stop_loss_trigger_price": float(stop_loss_trigger_price),
+                            "stop_loss_limit_price": float(stop_loss_limit_price),
+                            "message": "Limit buy order placed successfully with stop loss. Stop loss order will be created when the buy order is executed."
+                        })
 
-                return Response(response_data, status=status.HTTP_201_CREATED)
+                    return Response(response_data, status=status.HTTP_201_CREATED)
+            
             else:
-                return Response({"error": "Error placing buy"})
+                return Response({"error": "Invalid order category"}, status=status.HTTP_400_BAD_REQUEST)
 
         except ValueError as e:
             return Response({"error": f"Invalid data format: {str(e)}"}, status=status.HTTP_400_BAD_REQUEST)
@@ -696,6 +842,31 @@ class RoomTradeSellView(APIView):
         except Exception:
             return None
 
+    def create_stop_loss_order(self, user, room, symbol, quantity, stop_loss_trigger_price, stop_loss_limit_price, stock_name, original_order_id, is_short_sell=False):
+        """Create a stop loss buy order (for short positions) with trigger and limit prices"""
+        try:
+            stop_loss_order = OrderBook.objects.create(
+                user=user,
+                room=room,
+                order_type=OrderBook.BUY,  # Stop loss for sell/short is a BUY order
+                symbol=symbol,
+                quantity=quantity,
+                order_price=stop_loss_limit_price,
+                order_category=OrderBook.STOP_LOSS,
+                order_status=OrderBook.PENDING,
+                executed_price=None,
+                execution_timestamp=None,
+                parent_order_id=original_order_id,
+                stop_loss_trigger_price=stop_loss_trigger_price,
+                stop_loss_limit_price=stop_loss_limit_price,
+                remaining_quantity=quantity,
+                is_short_sell=is_short_sell
+            )
+            return stop_loss_order
+        except Exception as e:
+            print(f"Error creating stop loss order: {str(e)}")
+            return None
+
     def post(self, request, room_id):
         try:
             user = request.user
@@ -725,6 +896,11 @@ class RoomTradeSellView(APIView):
             quantity = int(data.get("quantity", 0))
             order_category = data.get("order_category", "").strip().upper()
             is_short_sell = data.get("is_short_sell", False)
+            
+            # Stop loss fields
+            has_stop_loss = data.get("has_stop_loss", False)
+            stop_loss_trigger_price = data.get("stop_loss_trigger_price")
+            stop_loss_limit_price = data.get("stop_loss_limit_price")
 
             if not symbol or quantity <= 0:
                 return Response({"error": "Invalid input: symbol and positive quantity are required"}, status=status.HTTP_400_BAD_REQUEST)
@@ -732,30 +908,84 @@ class RoomTradeSellView(APIView):
             if not order_category:
                 return Response({"error": "Please mention order category"})
 
+            # Validate stop loss if provided
+            if has_stop_loss:
+                if not stop_loss_trigger_price or not stop_loss_limit_price:
+                    return Response({
+                        "error": "Both trigger price and limit price are required for stop loss orders"
+                    }, status=status.HTTP_400_BAD_REQUEST)
+                
+                try:
+                    stop_loss_trigger_price = Decimal(str(stop_loss_trigger_price))
+                    stop_loss_limit_price = Decimal(str(stop_loss_limit_price))
+                    
+                    if stop_loss_trigger_price <= 0 or stop_loss_limit_price <= 0:
+                        return Response({
+                            "error": "Stop loss prices must be greater than 0"
+                        }, status=status.HTTP_400_BAD_REQUEST)
+                    
+                    if stop_loss_limit_price < stop_loss_trigger_price:
+                        return Response({
+                            "error": "Stop loss limit price must be greater than or equal to trigger price for sell orders"
+                        }, status=status.HTTP_400_BAD_REQUEST)
+                        
+                except (ValueError, TypeError, InvalidOperation):
+                    return Response({"error": "Invalid stop loss price format"}, status=status.HTTP_400_BAD_REQUEST)
+
+            # Check if stock exists
+            stock_exists = Stock.objects.filter(symbol=symbol).exists()
+            sme_exists = SMEStock.objects.filter(symbol=symbol).exists()
+
+            if not (stock_exists or sme_exists):
+                return Response({
+                    "error": f"Symbol '{symbol}' not found in our database"
+                }, status=status.HTTP_404_NOT_FOUND)
+
+            # Get stock name and fetch current market price
+            stock_name = self.get_stock_name(symbol)
+            if not stock_name:
+                return Response({"error": "Stock name not found"}, status=status.HTTP_404_NOT_FOUND)
+            
+            stock_data = self.get_indianapi_stock_data(symbol)
+            if not stock_data or not stock_data.get('ltp'):
+                return Response({
+                    "error": "Unable to fetch current market price. Please try again later."
+                }, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+
+            current_price = Decimal(str(stock_data['ltp']))
+
+            # Fetch or create portfolio
+            portfolio, created = UserPortfolio.objects.get_or_create(
+                user=user,
+                room=room,
+                symbol=symbol,
+                defaults={
+                    'stock_name': stock_name,
+                    'total_quantity': 0,
+                    'average_buy_price': Decimal('0.00'),
+                    'total_buy_value': Decimal('0.00')
+                }
+            )
+
+            # Fetch or create user's balance
+            balance, created = UserBalance.objects.get_or_create(
+                user=user,
+                room=room,
+                defaults={
+                    'total_cash_balance': Decimal('100000.00'),
+                    'reserved_cash_balance': Decimal('0.00')
+                }
+            )
+
             if order_category == "MARKET":
-                stock_exists = Stock.objects.filter(symbol=symbol).exists()
-                sme_exists = SMEStock.objects.filter(symbol=symbol).exists()
-
-                if not (stock_exists or sme_exists):
+                # Validate stop loss price against current price
+                if has_stop_loss and stop_loss_trigger_price <= current_price:
                     return Response({
-                        "error": f"Symbol '{symbol}' not found in our database"
-                    }, status=status.HTTP_404_NOT_FOUND)
-
-                # Fetch user's portfolio for this stock
-                portfolio = UserPortfolio.objects.filter(
-                    user=user,
-                    room=room,
-                    symbol=symbol
-                ).first()
-
-                if not portfolio:
-                    return Response({
-                        "error": f"No portfolio found for symbol {symbol}",
-                        "detail": "You don't own this stock in your portfolio"
+                        "error": "Stop loss trigger price must be above the current market price for sell/short orders"
                     }, status=status.HTTP_400_BAD_REQUEST)
 
                 if not is_short_sell:
-                # Check available quantity
+                    # Regular sell - check if user has sufficient quantity
                     if portfolio.available_quantity < quantity:
                         return Response({
                             "error": "Insufficient quantity in portfolio",
@@ -763,29 +993,8 @@ class RoomTradeSellView(APIView):
                             "available": portfolio.available_quantity
                         }, status=status.HTTP_400_BAD_REQUEST)
 
-                    # Get stock name and fetch current market price
-                    stock_name = self.get_stock_name(symbol)
-                    if not stock_name:
-                        return Response({"error": "Stock name not found"}, status=status.HTTP_404_NOT_FOUND)
-                    
-                    stock_data = self.get_indianapi_stock_data(symbol)
-                    if not stock_data or not stock_data.get('ltp'):
-                        return Response({
-                            "error": "Unable to fetch current market price. Please try again later."
-                        }, status=status.HTTP_503_SERVICE_UNAVAILABLE)
-
-                    current_price = Decimal(str(stock_data['ltp']))
-                    total_proceeds = current_price * Decimal(quantity)  # Use Decimal for precision
-
-                    # Fetch or create user's balance for this room
-                    balance, created = UserBalance.objects.get_or_create(
-                        user=user,
-                        room=room,
-                        defaults={
-                            'total_cash_balance': Decimal('100000.00'),
-                            'reserved_cash_balance': Decimal('0.00')
-                        }
-                    )
+                    # Execute regular sell
+                    total_proceeds = current_price * Decimal(quantity)
 
                     # Create the sell order
                     order = OrderBook.objects.create(
@@ -799,7 +1008,11 @@ class RoomTradeSellView(APIView):
                         order_status=OrderBook.EXECUTED,
                         filled_quantity=quantity,
                         executed_price=current_price,
-                        execution_timestamp=timezone.now()
+                        execution_timestamp=timezone.now(),
+                        is_short_sell=False,
+                        has_stop_loss=has_stop_loss,
+                        stop_loss_trigger_price=stop_loss_trigger_price if has_stop_loss else None,
+                        stop_loss_limit_price=stop_loss_limit_price if has_stop_loss else None
                     )
 
                     # Execute the sell transaction in portfolio
@@ -822,6 +1035,21 @@ class RoomTradeSellView(APIView):
                         total_value=total_proceeds
                     )
 
+                    # Create stop loss order if requested
+                    stop_loss_order = None
+                    if has_stop_loss:
+                        stop_loss_order = self.create_stop_loss_order(
+                            user=user,
+                            room=room,
+                            symbol=symbol,
+                            quantity=quantity,
+                            stop_loss_trigger_price=stop_loss_trigger_price,
+                            stop_loss_limit_price=stop_loss_limit_price,
+                            stock_name=stock_name,
+                            original_order_id=order.id,
+                            is_short_sell=False
+                        )
+
                     response_data = {
                         "success": True,
                         "message": "Sell order executed successfully",
@@ -840,31 +1068,19 @@ class RoomTradeSellView(APIView):
                         }
                     }
 
-                    return Response(response_data, status=status.HTTP_201_CREATED)
+                    if has_stop_loss:
+                        response_data.update({
+                            "stop_loss_enabled": True,
+                            "stop_loss_trigger_price": float(stop_loss_trigger_price),
+                            "stop_loss_limit_price": float(stop_loss_limit_price),
+                            "stop_loss_order_id": stop_loss_order.id if stop_loss_order else None
+                        })
+
                 else:
+                    # Short sell - no quantity check needed
+                    total_proceeds = current_price * Decimal(quantity)
 
-                    stock_name = self.get_stock_name(symbol)
-                    if not stock_name:
-                        return Response({"error": "Stock name not found"}, status=status.HTTP_404_NOT_FOUND)
-                    
-                    stock_data = self.get_indianapi_stock_data(symbol)
-                    if not stock_data or not stock_data.get('ltp'):
-                        return Response({
-                            "error": "Unable to fetch current market price. Please try again later."
-                        }, status=status.HTTP_503_SERVICE_UNAVAILABLE)
-                    
-                    current_price = Decimal(str(stock_data['ltp']))
-                    total_proceeds = current_price*quantity
-
-                    balance, created = UserBalance.objects.get_or_create(
-                        user=user,
-                        room=room,
-                        defaults={
-                            'total_cash_balance': Decimal('100000.00'),
-                            'reserved_cash_balance': Decimal('0.00')
-                        }
-                    )
-
+                    # Create the short sell order
                     order = OrderBook.objects.create(
                         user=user,
                         room=room,
@@ -876,15 +1092,21 @@ class RoomTradeSellView(APIView):
                         order_status=OrderBook.EXECUTED,
                         filled_quantity=quantity,
                         executed_price=current_price,
-                        execution_timestamp=timezone.now()
+                        execution_timestamp=timezone.now(),
+                                                is_short_sell=True,
+                        has_stop_loss=has_stop_loss,
+                        stop_loss_trigger_price=stop_loss_trigger_price if has_stop_loss else None,
+                        stop_loss_limit_price=stop_loss_limit_price if has_stop_loss else None
                     )
 
-                    if not portfolio.add_short_sell_transaction(quantity, current_price):
-                        return Response({"error": "Failed to update portfolio"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-                    
+                    # Add short position to portfolio
+                    portfolio.add_short_position(quantity, current_price)
+
+                    # Add proceeds to balance
                     previous_balance = balance.available_cash_balance
                     balance.add_cash(total_proceeds)
 
+                    # Create trade record
                     trade = Trade.objects.create(
                         user=user,
                         room=room,
@@ -896,9 +1118,24 @@ class RoomTradeSellView(APIView):
                         total_value=total_proceeds
                     )
 
+                    # Create stop loss order if requested
+                    stop_loss_order = None
+                    if has_stop_loss:
+                        stop_loss_order = self.create_stop_loss_order(
+                            user=user,
+                            room=room,
+                            symbol=symbol,
+                            quantity=quantity,
+                            stop_loss_trigger_price=stop_loss_trigger_price,
+                            stop_loss_limit_price=stop_loss_limit_price,
+                            stock_name=stock_name,
+                            original_order_id=order.id,
+                            is_short_sell=True
+                        )
+
                     response_data = {
                         "success": True,
-                        "message": "Sell order executed successfully",
+                        "message": "Short sell order executed successfully",
                         "order_id": order.id,
                         "trade_id": trade.id,
                         "symbol": symbol,
@@ -907,15 +1144,27 @@ class RoomTradeSellView(APIView):
                         "total_proceeds": float(total_proceeds),
                         "new_balance": float(balance.available_cash_balance),
                         "previous_balance": float(previous_balance),
+                        "is_short_sell": True,
                         "portfolio": {
-                            "remaining_quantity": portfolio.total_quantity,
-                            "average_price": float(portfolio.average_buy_price),
+                            "long_quantity": portfolio.total_quantity,
+                            "short_quantity": portfolio.short_quantity,
+                            "net_position": portfolio.net_position,
+                            "average_short_price": float(portfolio.average_short_price),
                             "realized_pnl": float(portfolio.realized_pnl)
                         }
                     }
 
-                    return Response(response_data, status=status.HTTP_201_CREATED)
-                
+                    if has_stop_loss:
+                        response_data.update({
+                            "stop_loss_enabled": True,
+                            "stop_loss_trigger_price": float(stop_loss_trigger_price),
+                            "stop_loss_limit_price": float(stop_loss_limit_price),
+                            "stop_loss_order_id": stop_loss_order.id if stop_loss_order else None,
+                            "stop_loss_type": "BUY"  # Stop loss for short is a buy order
+                        })
+
+                return Response(response_data, status=status.HTTP_201_CREATED)
+
             elif order_category == "LIMIT":
                 limit_price = data.get("limit_price")
                 if not limit_price:
@@ -932,83 +1181,277 @@ class RoomTradeSellView(APIView):
                         "error": "Invalid limit price format"
                     }, status=status.HTTP_400_BAD_REQUEST)
                 
-                stock_exists = Stock.objects.filter(symbol=symbol).exists()
-                sme_exists = SMEStock.objects.filter(symbol=symbol).exists()
-
-                if not (stock_exists or sme_exists):
-                    return Response({"error": f"Symbol '{symbol}' not found in our database"}, status=status.HTTP_404_NOT_FOUND)
-                
-                portfolio = UserPortfolio.objects.filter(
-                    user=user,
-                    room=room,
-                    symbol=symbol
-                ).first()
-
-                if not portfolio:
+                # Validate stop loss price against limit price
+                if has_stop_loss and stop_loss_trigger_price <= limit_price:
                     return Response({
-                        "error": f"No portfolio found for symbol {symbol}",
-                        "detail": "You don't own this stock in your portfolio"
+                        "error": "Stop loss trigger price must be above the limit price for sell orders"
                     }, status=status.HTTP_400_BAD_REQUEST)
 
-                # Check available quantity
-                if portfolio.available_quantity < quantity:
-                    return Response({
-                        "error": "Insufficient quantity in portfolio",
-                        "requested": quantity,
-                        "available": portfolio.available_quantity
-                    }, status=status.HTTP_400_BAD_REQUEST)
+                # Check if immediate execution is possible (LTP >= limit price for sell)
+                if current_price >= limit_price:
+                    # Immediate execution at current price
+                    if not is_short_sell:
+                        # Regular sell - check quantity
+                        if portfolio.available_quantity < quantity:
+                            # Partial execution based on available quantity
+                            quantity_to_execute = portfolio.available_quantity
+                            remaining_quantity = quantity - quantity_to_execute
+                            
+                            if quantity_to_execute <= 0:
+                                return Response({
+                                    "error": "No shares available to sell",
+                                    "requested": quantity,
+                                    "available": 0
+                                }, status=status.HTTP_400_BAD_REQUEST)
+                        else:
+                            quantity_to_execute = quantity
+                            remaining_quantity = 0
 
-                # Get current market price for reference (optional validation)
-                stock_name = self.get_stock_name(symbol)
-                # stock_data = self.get_indianapi_stock_data(symbol)
-                
-                # if stock_data and stock_data.get('ltp'):
-                #     current_market_price = Decimal(str(stock_data['ltp']))
-                    
+                        # Execute immediate portion
+                        immediate_proceeds = current_price * Decimal(quantity_to_execute)
 
-                # Reserve the quantity in portfolio (prevent overselling)
-                if not portfolio.reserve_quantity(quantity):
-                    return Response({
-                        "error": "Failed to reserve quantity for limit order"
-                    }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+                        # Create the order
+                        order = OrderBook.objects.create(
+                            user=user,
+                            room=room,
+                            order_type=OrderBook.SELL,
+                            symbol=symbol,
+                            quantity=quantity,  # Total requested quantity
+                            order_price=limit_price,
+                            order_category=OrderBook.LIMIT,
+                            order_status=OrderBook.PARTIALLY_EXECUTED if remaining_quantity > 0 else OrderBook.EXECUTED,
+                            filled_quantity=quantity_to_execute,
+                            executed_price=current_price,
+                            execution_timestamp=timezone.now() if quantity_to_execute > 0 else None,
+                            partially_executed_quantity=quantity_to_execute,
+                            remaining_quantity=remaining_quantity,
+                            is_short_sell=False,
+                            has_stop_loss=has_stop_loss,
+                            stop_loss_trigger_price=stop_loss_trigger_price if has_stop_loss else None,
+                            stop_loss_limit_price=stop_loss_limit_price if has_stop_loss else None
+                        )
 
-                # Create the limit sell order (PENDING status)
-                order = OrderBook.objects.create(
-                    user=user,
-                    room=room,
-                    order_type=OrderBook.SELL,
-                    symbol=symbol,
-                    quantity=quantity,
-                    order_price=limit_price,
-                    order_category=OrderBook.LIMIT,
-                    order_status=OrderBook.PENDING,
-                    filled_quantity=0,
-                    executed_price=None,
-                    execution_timestamp=None
-                )
+                        # Execute the sell transaction
+                        if quantity_to_execute > 0:
+                            portfolio.add_sell_transaction(quantity_to_execute, current_price)
+                            balance.add_cash(immediate_proceeds)
 
-                response_data = {
-                    "success": True,
-                    "message": "Limit sell order placed successfully",
-                    "order_id": order.id,
-                    "symbol": symbol,
-                    "quantity": quantity,
-                    "limit_price": float(limit_price),
-                    "order_status": "PENDING",
-                    "portfolio": {
-                        "total_quantity": portfolio.total_quantity,
-                        "available_quantity": portfolio.available_quantity,
-                        "reserved_quantity": portfolio.reserved_quantity
+                            # Create trade record
+                            trade = Trade.objects.create(
+                                user=user,
+                                room=room,
+                                order=order,
+                                trade_type=Trade.SELL,
+                                symbol=symbol,
+                                quantity=quantity_to_execute,
+                                price=current_price,
+                                total_value=immediate_proceeds
+                            )
+
+                            # Create stop loss if fully executed
+                            stop_loss_order = None
+                            if has_stop_loss and remaining_quantity == 0:
+                                stop_loss_order = self.create_stop_loss_order(
+                                    user=user,
+                                    room=room,
+                                    symbol=symbol,
+                                    quantity=quantity_to_execute,
+                                    stop_loss_trigger_price=stop_loss_trigger_price,
+                                    stop_loss_limit_price=stop_loss_limit_price,
+                                    stock_name=stock_name,
+                                    original_order_id=order.id,
+                                    is_short_sell=False
+                                )
+
+                        response_data = {
+                            "success": True,
+                            "message": f"Limit sell order: {quantity_to_execute} shares executed at {float(current_price)}" + 
+                                      (f", {remaining_quantity} shares pending" if remaining_quantity > 0 else ""),
+                            "order_id": order.id,
+                            "symbol": symbol,
+                            "total_quantity": quantity,
+                            "executed_quantity": quantity_to_execute,
+                            "executed_price": float(current_price) if quantity_to_execute > 0 else None,
+                            "remaining_quantity": remaining_quantity,
+                            "limit_price": float(limit_price),
+                            "immediate_proceeds": float(immediate_proceeds) if quantity_to_execute > 0 else 0,
+                            "order_status": order.order_status,
+                            "new_balance": float(balance.available_cash_balance),
+                            "portfolio": {
+                                "remaining_quantity": portfolio.total_quantity,
+                                "average_price": float(portfolio.average_buy_price),
+                                "realized_pnl": float(portfolio.realized_pnl)
+                            }
+                        }
+
+                        if quantity_to_execute > 0:
+                            response_data["trade_id"] = trade.id
+
+                        if has_stop_loss:
+                            response_data.update({
+                                "stop_loss_enabled": True,
+                                "stop_loss_trigger_price": float(stop_loss_trigger_price),
+                                "stop_loss_limit_price": float(stop_loss_limit_price),
+                                "stop_loss_order_id": stop_loss_order.id if stop_loss_order else None,
+                                "stop_loss_note": "Stop loss will be created after full order execution" if remaining_quantity > 0 else "Stop loss order created"
+                            })
+
+                    else:
+                        # Short sell - immediate execution
+                        immediate_proceeds = current_price * Decimal(quantity)
+
+                        # Create the order
+                        order = OrderBook.objects.create(
+                            user=user,
+                            room=room,
+                            order_type=OrderBook.SELL,
+                            symbol=symbol,
+                            quantity=quantity,
+                            order_price=limit_price,
+                            order_category=OrderBook.LIMIT,
+                            order_status=OrderBook.EXECUTED,
+                            filled_quantity=quantity,
+                            executed_price=current_price,
+                            execution_timestamp=timezone.now(),
+                            is_short_sell=True,
+                            has_stop_loss=has_stop_loss,
+                            stop_loss_trigger_price=stop_loss_trigger_price if has_stop_loss else None,
+                            stop_loss_limit_price=stop_loss_limit_price if has_stop_loss else None
+                        )
+
+                        # Add short position
+                        portfolio.add_short_position(quantity, current_price)
+                        balance.add_cash(immediate_proceeds)
+
+                        # Create trade record
+                        trade = Trade.objects.create(
+                            user=user,
+                            room=room,
+                            order=order,
+                            trade_type=Trade.SELL,
+                            symbol=symbol,
+                            quantity=quantity,
+                            price=current_price,
+                            total_value=immediate_proceeds
+                        )
+
+                        # Create stop loss if requested
+                        stop_loss_order = None
+                        if has_stop_loss:
+                            stop_loss_order = self.create_stop_loss_order(
+                                user=user,
+                                room=room,
+                                symbol=symbol,
+                                quantity=quantity,
+                                stop_loss_trigger_price=stop_loss_trigger_price,
+                                stop_loss_limit_price=stop_loss_limit_price,
+                                stock_name=stock_name,
+                                original_order_id=order.id,
+                                is_short_sell=True
+                            )
+
+                        response_data = {
+                            "success": True,
+                            "message": "Short sell limit order executed immediately at market price",
+                            "order_id": order.id,
+                            "trade_id": trade.id,
+                            "symbol": symbol,
+                            "quantity": quantity,
+                            "executed_price": float(current_price),
+                            "limit_price": float(limit_price),
+                            "total_proceeds": float(immediate_proceeds),
+                            "new_balance": float(balance.available_cash_balance),
+                            "is_short_sell": True,
+                            "portfolio": {
+                                "long_quantity": portfolio.total_quantity,
+                                "short_quantity": portfolio.short_quantity,
+                                "net_position": portfolio.net_position,
+                                "average_short_price": float(portfolio.average_short_price),
+                                "realized_pnl": float(portfolio.realized_pnl)
+                            }
+                        }
+
+                        if has_stop_loss:
+                            response_data.update({
+                                "stop_loss_enabled": True,
+                                "stop_loss_trigger_price": float(stop_loss_trigger_price),
+                                "stop_loss_limit_price": float(stop_loss_limit_price),
+                                "stop_loss_order_id": stop_loss_order.id if stop_loss_order else None,
+                                "stop_loss_type": "BUY"
+                            })
+
+                    return Response(response_data, status=status.HTTP_201_CREATED)
+
+                else:
+                    # LTP < limit price, place as pending order
+                    if not is_short_sell:
+                        # Regular sell - check and reserve quantity
+                        if portfolio.available_quantity < quantity:
+                            return Response({
+                                "error": "Insufficient quantity in portfolio",
+                                "requested": quantity,
+                                "available": portfolio.available_quantity
+                            }, status=status.HTTP_400_BAD_REQUEST)
+
+                        # Reserve the quantity
+                        if not portfolio.reserve_quantity(quantity):
+                            return Response({
+                                "error": "Failed to reserve quantity for limit order"
+                            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+                    # Create pending order
+                    order = OrderBook.objects.create(
+                        user=user,
+                        room=room,
+                        order_type=OrderBook.SELL,
+                        symbol=symbol,
+                        quantity=quantity,
+                        order_price=limit_price,
+                        order_category=OrderBook.LIMIT,
+                        order_status=OrderBook.PENDING,
+                        filled_quantity=0,
+                        executed_price=None,
+                        execution_timestamp=None,
+                        remaining_quantity=quantity,
+                        is_short_sell=is_short_sell,
+                        has_stop_loss=has_stop_loss,
+                        stop_loss_trigger_price=stop_loss_trigger_price if has_stop_loss else None,
+                        stop_loss_limit_price=stop_loss_limit_price if has_stop_loss else None
+                    )
+
+                    response_data = {
+                        "success": True,
+                        "message": f"Limit {'short ' if is_short_sell else ''}sell order placed successfully",
+                        "order_id": order.id,
+                        "symbol": symbol,
+                        "quantity": quantity,
+                        "limit_price": float(limit_price),
+                        "current_ltp": float(current_price),
+                        "order_status": "PENDING",
+                        "is_short_sell": is_short_sell
                     }
-                }
 
-                return Response(response_data, status=status.HTTP_201_CREATED)
+                    if not is_short_sell:
+                        response_data["portfolio"] = {
+                            "total_quantity": portfolio.total_quantity,
+                            "available_quantity": portfolio.available_quantity,
+                            "reserved_quantity": portfolio.reserved_quantity
+                        }
+
+                    if has_stop_loss:
+                        response_data.update({
+                            "stop_loss_enabled": True,
+                            "stop_loss_trigger_price": float(stop_loss_trigger_price),
+                            "stop_loss_limit_price": float(stop_loss_limit_price),
+                            "message": response_data["message"] + ". Stop loss order will be created when the sell order is executed."
+                        })
+
+                    return Response(response_data, status=status.HTTP_201_CREATED)
 
             else:
                 return Response({
                     "error": "Invalid order category. Must be either 'MARKET' or 'LIMIT'"
                 }, status=status.HTTP_400_BAD_REQUEST)
-
 
         except ValueError as e:
             return Response({"error": f"Invalid data format: {str(e)}"}, status=status.HTTP_400_BAD_REQUEST)

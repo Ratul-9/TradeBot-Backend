@@ -51,9 +51,9 @@ class UserBalance(models.Model):
         return self.total_cash_balance - self.reserved_cash_balance
 
     @property
-    def cash_balance(self):
+    def available_cash_balance(self):
         """Backward compatibility - returns available cash"""
-        return self.available_cash_balance
+        return self.total_cash_balance - self.reserved_cash_balance
 
     def reserve_cash(self, amount):
         """Reserve cash for pending orders"""
@@ -137,12 +137,14 @@ class OrderBook(models.Model):
     PENDING = 'PENDING'
     EXECUTED = 'EXECUTED'
     CANCELLED = 'CANCELLED'
-    PARTIALLY_FILLED = 'PARTIALLY_FILLED'
+    TRIGGERED = 'TRIGGERED'
+    PARTIALLY_EXECUTED = 'PARTIALLY_EXECUTED'    
     ORDER_STATUS_CHOICES = [
         (PENDING, 'Pending'),
         (EXECUTED, 'Executed'),
         (CANCELLED, 'Cancelled'),
-        (PARTIALLY_FILLED, 'Partially Filled'),
+        (TRIGGERED, 'Triggered'), 
+        (PARTIALLY_EXECUTED, 'Partially Executed'),
     ]
 
     MARKET = 'MARKET'
@@ -152,6 +154,8 @@ class OrderBook(models.Model):
         (MARKET, 'Market Order'),
         (LIMIT, 'Limit Order'),
         (STOP_LOSS, 'Stop Loss Order'),
+        ('STOP_LOSS_LIMIT', 'Stop Loss Limit'),
+
     ]
 
     user = models.ForeignKey(User, on_delete=models.CASCADE)
@@ -167,8 +171,12 @@ class OrderBook(models.Model):
     order_timestamp = models.DateTimeField(default=timezone.now)
     execution_timestamp = models.DateTimeField(null=True, blank=True)
     has_stop_loss = models.BooleanField(default=False)
-    stop_loss_price = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    stop_loss_trigger_price = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    stop_loss_limit_price = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
     parent_order_id = models.ForeignKey('self', on_delete=models.CASCADE, null=True, blank=True)
+    is_short_sell = models.BooleanField(default=False)
+    partially_filled_quantity = models.IntegerField(default=0)
+    remaining_quantity = models.IntegerField(default=0)
     cancellation_timestamp = models.DateTimeField(null=True, blank=True)
     notes = models.TextField(blank=True, null=True)
 
@@ -198,6 +206,20 @@ class OrderBook(models.Model):
             return self.filled_quantity * self.executed_price
         return Decimal('0.00')
 
+    def remove_sell_transaction(self, sell_quantity):
+        """Remove quantity from portfolio when selling"""
+        if self.total_quantity >= sell_quantity:
+            self.total_quantity -= sell_quantity
+            if self.total_quantity == 0:
+                self.average_buy_price = Decimal('0.00')
+                self.total_buy_value = Decimal('0.00')
+        else:
+            raise ValueError("Cannot sell more than available quantity")
+
+    @property
+    def remaining_quantity_calculated(self):
+        return self.quantity - self.filled_quantity
+
     def __str__(self):
         return f"Order {self.id}: {self.order_type} {self.quantity} {self.symbol} @ {self.order_price} - {self.order_status}"
 
@@ -209,6 +231,8 @@ class UserPortfolio(models.Model):
     stock_name = models.CharField(max_length=200, blank=True)
     total_quantity = models.IntegerField(default=0)
     reserved_quantity = models.IntegerField(default=0)
+    short_quantity = models.IntegerField(default=0)
+    average_short_price = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)
     average_buy_price = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)
     total_buy_value = models.DecimalField(max_digits=15, decimal_places=2, default=0.00)
     total_sell_value = models.DecimalField(max_digits=15, decimal_places=2, default=0.00)
@@ -222,6 +246,47 @@ class UserPortfolio(models.Model):
             models.Index(fields=['user', 'room']),
             models.Index(fields=['symbol']),
         ]
+
+    @property
+    def net_position(self):
+        return self.total_quantity - self.short_quantity
+    
+    def add_short_position(self, quantity, price):
+        short_value = quantity * price
+
+        if self.short_quantity > 0:
+            total_value = (self.short_quantity * self.average_short_price) + short_value
+            self.short_quantity += quantity
+            self.average_short_price = total_value / self.short_quantity
+        else:
+            self.short_quantity = quantity
+            self.average_short_price = price
+        
+        self.total_short_value += short_value
+        self.save()
+    
+    def cover_short_position(self, quantity, price):
+        """Cover (buy back) short position"""
+        if quantity <= self.short_quantity:
+            cover_value = quantity * price
+            
+            # Calculate realized P&L for covered shorts
+            # For shorts: P&L = (short price - cover price) * quantity
+            short_basis = quantity * self.average_short_price
+            realized_pnl_for_cover = short_basis - cover_value
+            
+            # Update portfolio
+            self.short_quantity -= quantity
+            self.realized_pnl += realized_pnl_for_cover
+            
+            # If all shorts covered, reset average
+            if self.short_quantity == 0:
+                self.average_short_price = Decimal('0.00')
+                self.total_short_value = Decimal('0.00')
+            
+            self.save()
+            return True
+        return False
 
     @property
     def available_quantity(self):
