@@ -15,6 +15,7 @@ from datetime import timedelta
 from decouple import config
 import os
 from dotenv import load_dotenv
+from celery.schedules import crontab
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -43,6 +44,7 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
     'rest_framework',
     'rest_framework_simplejwt',
+    'django_celery_beat',
     'rest_framework_simplejwt.token_blacklist',
     'corsheaders',
     'users',
@@ -243,3 +245,14 @@ AWS_S3_FILE_OVERWRITE = False
 AWS_DEFAULT_ACL =  None
 AWS_S3_VERITY = True
 DEFAULT_FILE_STORAGE = 'storages.backends.s3boto3.S3Boto3Storage'
+
+CELERY_BROKER_URL = 'master.tradebot-cache.qgc5pa.aps1.cache.amazonaws.com:6379'
+CELERY_ACCEPT_CONTENT = ['json']
+CELERY_TAKS_SERIALIZER = 'json'
+
+CELERY_BEAT_SCHEDULE = {
+    'execute-orders-every-2-seconds': {
+        'task': 'rooms.tasks.execute_pending_orders',
+        'schedule': 2.0,
+    }
+}
