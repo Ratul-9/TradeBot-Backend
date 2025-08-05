@@ -148,10 +148,10 @@ WSGI_APPLICATION = 'backend.wsgi.application'
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.postgresql',
-        'NAME': 'tradebot_db',
-        'USER': 'mysuperuser',
-        'PASSWORD': 'mysuperuser2025',
-        'HOST': 'tradebotdb.c92qmisuq9bx.ap-south-1.rds.amazonaws.com',
+        'NAME': 'TradeBotDB',
+        'USER': 'adminuser001',
+        'PASSWORD': 'admin280325',
+        'HOST': 'tradebot-db.c92qmisuq9bx.ap-south-1.rds.amazonaws.com',
         'PORT': '5432',
     }
 }
