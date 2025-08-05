@@ -150,7 +150,7 @@ DATABASES = {
         'ENGINE': 'django.db.backends.postgresql',
         'NAME': 'tradebot_db',
         'USER': 'mysuperuser',
-        'PASSWORD': 'superuser2025',
+        'PASSWORD': 'Rrr300423',
         'HOST': 'tradebotdb.c92qmisuq9bx.ap-south-1.rds.amazonaws.com',
         'PORT': '5432',
     }
