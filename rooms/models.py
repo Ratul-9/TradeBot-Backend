@@ -176,6 +176,7 @@ class OrderBook(models.Model):
     parent_order_id = models.ForeignKey('self', on_delete=models.CASCADE, null=True, blank=True)
     is_short_sell = models.BooleanField(default=False)
     partially_filled_quantity = models.IntegerField(default=0)
+    partially_executed_quantity = models.IntegerField(default=0)
     remaining_quantity = models.IntegerField(default=0)
     cancellation_timestamp = models.DateTimeField(null=True, blank=True)
     notes = models.TextField(blank=True, null=True)
