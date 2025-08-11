@@ -352,7 +352,7 @@ class RoomTradeBuyView(APIView):
                 logger.error(f"Invalid LTP value for {symbol}: {ltp}")
                 return None
 
-            return float(ltp)
+            return {"ltp": float(ltp)}
 
         except upstox_client.rest.ApiException as api_error:
             logger.error(f"Upstox API error for {symbol}: {api_error}")
