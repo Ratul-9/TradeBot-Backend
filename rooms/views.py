@@ -274,7 +274,66 @@ class RoomTradeBuyView(APIView):
             return symbol
         except Exception:
             return symbol
+        
 
+
+    def get_instrument_key(self, symbol: str) -> str | None:
+        try:
+            cache_key = f"instrument_key_{symbol}"
+            instrument_key = cache.get(cache_key)
+
+            if instrument_key:
+                return instrument_key
+
+            # First check in Stock table
+            stock = Stock.objects.filter(symbol=symbol).first()
+            if stock and stock.isin_number:
+                instrument_key = f"NSE_EQ|{stock.isin_number}"
+                cache.set(cache_key, instrument_key, 600)
+                return instrument_key
+
+            # Then check SMEStock table
+            sme_stock = SMEStock.objects.filter(symbol=symbol).first()
+            if sme_stock and sme_stock.isin_number:
+                instrument_key = f"NSE_EQ|{sme_stock.isin_number}"
+                cache.set(cache_key, instrument_key, 600)
+                return instrument_key
+
+            return None
+
+        except Exception as e:
+            logger.error(f"Error fetching instrument key for {symbol}: {e}")
+            return None
+        
+
+    def get_ltp(self, symbol):
+        api_Instance = upstox_client.HistoryV3Api()
+        instrument_key = self.get_instrument_key(symbol)
+
+        try:
+            resp = api_Instance.get_intra_day_candle_data(
+                instrument_key=instrument_key,
+                interval="days",
+                unit="1"
+            )
+
+            ltp = resp['data']['candles'][0][4]
+
+            if not ltp:
+                return Response({"Could not get last traded price."})
+            
+            return Response({"ltp:", ltp})
+        
+        except ApiException as api_error:
+                logger.error(f"Upstox API error for {symbol}: {api_error}")
+                return Response({
+                    "error": f"Upstox API error: {str(api_error)}",
+                    "symbol": symbol
+                }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+            
+            
+        
     def get_indianapi_stock_data(self, stock_name):
         """Fetch stock data from IndianAPI"""
         try:
@@ -480,7 +539,7 @@ class RoomTradeBuyView(APIView):
                 return Response({"error": "Stock name not found"}, status=status.HTTP_404_NOT_FOUND)
             
             # Get current market price for all order types
-            stock_data = self.get_indianapi_stock_data(symbol)
+            stock_data = self.get_ltp(symbol)
             if not stock_data or not stock_data.get('ltp'):
                 return Response({
                     "error": "Unable to fetch current market price. Please try again later."
@@ -2163,32 +2222,7 @@ class HistoricalDataView(APIView):
 
                 return Response({"candles": candles})
 
-                candles_data = getattr(response, "data", {}).get("candles", [])
-                if not candles_data:
-                    return Response({
-                        "error": "No historical data found for the symbol",
-                        "symbol": symbol
-                    }, status=404)
-
-                formatted_candles = []
-                for candle in candles_data:
-                    if len(candle) >= 6:
-                        formatted_candles.append({
-                            "timestamp": candle[0],
-                            "open": float(candle[1]),
-                            "high": float(candle[2]),
-                            "low": float(candle[3]),
-                            "close": float(candle[4]),
-                            "volume": int(candle[5]),
-                        })
-
-                return Response({
-                    "symbol": symbol,
-                    "interval": raw_interval,
-                    "from": from_date,
-                    "to": to_date,
-                    "candles": formatted_candles
-                }, status=status.HTTP_200_OK)
+                
             except ApiException as api_error:
                 logger.error(f"Upstox API error for {symbol}: {api_error}")
                 return Response({
