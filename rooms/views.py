@@ -337,6 +337,11 @@ class RoomTradeBuyView(APIView):
                 return None
 
             data = resp_dict['data']
+            if hasattr(data, 'to_dict'):
+                data = data.to_dict()
+            elif hasattr(data, '__dict__'):
+                data = vars(data)
+
             if not data or 'candles' not in data or not data['candles']:
                 logger.error(f"No candle data found for {symbol}")
                 return None
