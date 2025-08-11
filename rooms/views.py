@@ -566,10 +566,9 @@ class RoomTradeBuyView(APIView):
                 return Response({"error": "Stock name not found"}, status=status.HTTP_404_NOT_FOUND)
             
             stock_data = self.get_ltp(symbol)
-            if not stock_data:
-                return Response({
-                    "error": "Unable to fetch current market price. Please try again later."
-                }, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+            if "error" in stock_data:
+                return Response({"error": stock_data["error"]}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+
 
             current_ltp = Decimal(str(stock_data['ltp']))
             
