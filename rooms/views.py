@@ -318,7 +318,7 @@ class RoomTradeBuyView(APIView):
         try:
             resp = apiInstance.get_intra_day_candle_data(
                 instrument_key=instrument_key,
-                interval="1minute",  # Use "minute" for intraday
+                interval="5minute",  # Use "minute" for intraday
                 unit="1"
             )
 
