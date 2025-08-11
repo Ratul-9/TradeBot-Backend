@@ -313,17 +313,18 @@ class RoomTradeBuyView(APIView):
         print(f"DEBUG: instrument_key = {instrument_key}")
 
         if not instrument_key:
-            return None
+            return {"error": f"Could not get instrument key for {symbol}"}
 
         try:
             resp = apiInstance.get_intra_day_candle_data(
                 instrument_key=instrument_key,
-                interval="minutes",  # try "day" instead of "days"
+                interval="minute",  # Use "minute" for intraday
                 unit="1"
             )
 
             print(f"DEBUG raw resp: {resp}")
 
+            # Convert to dict safely
             if hasattr(resp, 'to_dict'):
                 resp_dict = resp.to_dict()
             elif hasattr(resp, '__dict__'):
@@ -333,6 +334,7 @@ class RoomTradeBuyView(APIView):
 
             print(f"DEBUG resp_dict: {resp_dict}")
 
+            # Get data block
             data = resp_dict.get('data')
             if hasattr(data, 'to_dict'):
                 data = data.to_dict()
@@ -342,22 +344,26 @@ class RoomTradeBuyView(APIView):
             print(f"DEBUG data: {data}")
 
             if not data or 'candles' not in data or not data['candles']:
-                print(f"DEBUG: No candle data found")
-                return {"error": "No dict found"}
+                return {"error": f"No candle data found for {symbol}"}
 
-            candles = resp_dict['data']['candles']
-            if candles:
-                latest_candle = candles[0]
-                ltp = latest_candle[4]
-            print(f"DEBUG latest_candle: {latest_candle}")
+            candles = data['candles']
+            latest_candle = candles[0] if candles else None
 
             if not latest_candle or len(latest_candle) < 5:
-                return {"error": "No latest candle"}
+                return {"error": f"Invalid candle format for {symbol}"}
+
+            ltp = latest_candle[4]
+            if ltp is None or ltp <= 0:
+                return {"error": f"Invalid LTP value for {symbol}: {ltp}"}
+
             return {"ltp": float(ltp)}
 
         except Exception as e:
+            import traceback
             print(f"DEBUG Exception: {e}")
-            return None
+            print(traceback.format_exc())
+            return {"error": f"Exception while fetching LTP: {e}"}
+
 
                 
         
@@ -567,7 +573,8 @@ class RoomTradeBuyView(APIView):
             
             stock_data = self.get_ltp(symbol)
             if "error" in stock_data:
-                return Response({"error": stock_data["error"]}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+                return Response(stock_data, status=503)
+
 
 
             current_ltp = Decimal(str(stock_data['ltp']))
