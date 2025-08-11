@@ -310,18 +310,20 @@ class RoomTradeBuyView(APIView):
         apiInstance = upstox_client.HistoryV3Api()
         instrument_key = self.get_instrument_key(symbol)
 
+        print(f"DEBUG: instrument_key = {instrument_key}")
+
         if not instrument_key:
-            logger.error(f"Could not get instrument key for {symbol}")
             return None
 
         try:
             resp = apiInstance.get_intra_day_candle_data(
                 instrument_key=instrument_key,
-                interval="minute",  # Use minute candles for near real-time LTP
+                interval="day",  # try "day" instead of "days"
                 unit="1"
             )
 
-            # Convert response to dict
+            print(f"DEBUG raw resp: {resp}")
+
             if hasattr(resp, 'to_dict'):
                 resp_dict = resp.to_dict()
             elif hasattr(resp, '__dict__'):
@@ -329,36 +331,31 @@ class RoomTradeBuyView(APIView):
             else:
                 resp_dict = resp
 
+            print(f"DEBUG resp_dict: {resp_dict}")
+
             data = resp_dict.get('data')
-            # If data is a model object, convert it to dict
             if hasattr(data, 'to_dict'):
                 data = data.to_dict()
             elif hasattr(data, '__dict__'):
                 data = vars(data)
 
+            print(f"DEBUG data: {data}")
+
             if not data or 'candles' not in data or not data['candles']:
-                logger.error(f"No candle data found for {symbol}: {data}")
+                print(f"DEBUG: No candle data found")
                 return None
 
             latest_candle = data['candles'][0]
+            print(f"DEBUG latest_candle: {latest_candle}")
+
             if not latest_candle or len(latest_candle) < 5:
-                logger.error(f"Invalid candle data for {symbol}: {latest_candle}")
                 return None
 
-            ltp = latest_candle[4]  # Close price
-
-            # Final sanity check
-            if ltp is None or ltp <= 0:
-                logger.error(f"Invalid LTP value for {symbol}: {ltp}")
-                return None
-
+            ltp = latest_candle[4]
             return {"ltp": float(ltp)}
 
-        except upstox_client.rest.ApiException as api_error:
-            logger.error(f"Upstox API error for {symbol}: {api_error}")
-            return None
         except Exception as e:
-            logger.error(f"Unexpected error getting LTP for {symbol}: {e}")
+            print(f"DEBUG Exception: {e}")
             return None
 
                 
