@@ -318,7 +318,7 @@ class RoomTradeBuyView(APIView):
         try:
             resp = apiInstance.get_intra_day_candle_data(
                 instrument_key=instrument_key,
-                interval="day",  # try "day" instead of "days"
+                interval="minutes",  # try "day" instead of "days"
                 unit="1"
             )
 
@@ -343,15 +343,16 @@ class RoomTradeBuyView(APIView):
 
             if not data or 'candles' not in data or not data['candles']:
                 print(f"DEBUG: No candle data found")
-                return None
+                return {"error": "No dict found"}
 
-            latest_candle = data['candles'][0]
+            candles = resp_dict['data']['candles']
+            if candles:
+                latest_candle = candles[0]
+                ltp = latest_candle[4]
             print(f"DEBUG latest_candle: {latest_candle}")
 
             if not latest_candle or len(latest_candle) < 5:
-                return None
-
-            ltp = latest_candle[4]
+                return {"error": "No latest candle"}
             return {"ltp": float(ltp)}
 
         except Exception as e:
