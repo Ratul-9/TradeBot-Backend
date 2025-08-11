@@ -317,71 +317,50 @@ class RoomTradeBuyView(APIView):
         try:
             resp = apiInstance.get_intra_day_candle_data(
                 instrument_key=instrument_key,
-                interval="days",
+                interval="minute",  # Use minute candles for near real-time LTP
                 unit="1"
             )
-                
-            
+
+            # Convert response to dict
             if hasattr(resp, 'to_dict'):
                 resp_dict = resp.to_dict()
-                print(f"DEBUG: Converted to dict: {resp_dict}")
             elif hasattr(resp, '__dict__'):
-                resp_dict = resp.__dict__
-                print(f"DEBUG: Using __dict__: {resp_dict}")
+                resp_dict = vars(resp)
             else:
                 resp_dict = resp
-                print(f"DEBUG: Using response as-is: {resp_dict}")
 
-            if not resp_dict or 'data' not in resp_dict:
-                logger.error(f"Invalid response structure for {symbol}: {resp_dict}")
-                return None
-
-            data = resp_dict['data']
+            data = resp_dict.get('data')
+            # If data is a model object, convert it to dict
             if hasattr(data, 'to_dict'):
                 data = data.to_dict()
             elif hasattr(data, '__dict__'):
                 data = vars(data)
 
             if not data or 'candles' not in data or not data['candles']:
-                logger.error(f"No candle data found for {symbol}")
+                logger.error(f"No candle data found for {symbol}: {data}")
                 return None
-            
-            candles = data['candles']
 
-            if not candles or len(candles) == 0:
-                logger.error(f"Empty candles array for {symbol}")
-                return None
-            
-            # Get the first (latest) candle
-            latest_candle = candles[0]
+            latest_candle = data['candles'][0]
             if not latest_candle or len(latest_candle) < 5:
                 logger.error(f"Invalid candle data for {symbol}: {latest_candle}")
                 return None
-            
-            # Index 4 is the close price (LTP)
-            ltp = latest_candle[4]
-            print(f"DEBUG: LTP value: {ltp}, type: {type(ltp)}")
-        
+
+            ltp = latest_candle[4]  # Close price
+
+            # Final sanity check
             if ltp is None or ltp <= 0:
                 logger.error(f"Invalid LTP value for {symbol}: {ltp}")
                 return None
-        
-            # Return the LTP value in a dictionary format
-            result = {"ltp": float(ltp)}
-            print(f"DEBUG: Final result: {result}")
-            return result
-        
-        except ApiException as api_error:
+
+            return float(ltp)
+
+        except upstox_client.rest.ApiException as api_error:
             logger.error(f"Upstox API error for {symbol}: {api_error}")
-            print(f"DEBUG: API Exception: {api_error}")
             return None
         except Exception as e:
             logger.error(f"Unexpected error getting LTP for {symbol}: {e}")
-            print(f"DEBUG: Unexpected error: {e}")
-            import traceback
-            print(f"DEBUG: Traceback: {traceback.format_exc()}")
             return None
-                
+
                 
         
     def get_indianapi_stock_data(self, stock_name):
