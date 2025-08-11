@@ -307,7 +307,7 @@ class RoomTradeBuyView(APIView):
         
 
     def get_ltp(self, symbol):
-        api_Instance = upstox_client.HistoryV3Api()
+        apiInstance = upstox_client.HistoryV3Api()
         instrument_key = self.get_instrument_key(symbol)
 
         if not instrument_key:
@@ -315,7 +315,7 @@ class RoomTradeBuyView(APIView):
             return None
 
         try:
-            resp = api_Instance.get_intra_day_candle_data(
+            resp = apiInstance.get_intra_day_candle_data(
                 instrument_key=instrument_key,
                 interval="days",
                 unit="1"
@@ -567,7 +567,7 @@ class RoomTradeBuyView(APIView):
             
             # Get current market price for all order types
             stock_data = self.get_ltp(symbol)
-            if not stock_data or not stock_data.get('ltp'):
+            if not stock_data or 'ltp' not in stock_data or stock_data['ltp'] is None or stock_data['ltp'] <= 0:
                 return Response({
                     "error": "Unable to fetch current market price. Please try again later."
                 }, status=status.HTTP_503_SERVICE_UNAVAILABLE)
