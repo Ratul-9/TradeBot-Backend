@@ -311,7 +311,7 @@ class RoomTradeBuyView(APIView):
         instrument_key = self.get_instrument_key(symbol)
 
         if not instrument_key:
-            logger.error(f"Could not get instrument key")
+            logger.error(f"Could not get instrument key for {symbol}")
             return None
 
         try:
@@ -320,12 +320,23 @@ class RoomTradeBuyView(APIView):
                 interval="days",
                 unit="1"
             )
+                
+            
+            if hasattr(resp, 'to_dict'):
+                resp_dict = resp.to_dict()
+                print(f"DEBUG: Converted to dict: {resp_dict}")
+            elif hasattr(resp, '__dict__'):
+                resp_dict = resp.__dict__
+                print(f"DEBUG: Using __dict__: {resp_dict}")
+            else:
+                resp_dict = resp
+                print(f"DEBUG: Using response as-is: {resp_dict}")
 
-            if not resp or 'data' not in resp:
-                logger.error(f"Invalid response structure for {symbol}: {resp}")
+            if not resp_dict or 'data' not in resp_dict:
+                logger.error(f"Invalid response structure for {symbol}: {resp_dict}")
                 return None
 
-            data = resp['data']
+            data = resp_dict['data']
             if not data or 'candles' not in data or not data['candles']:
                 logger.error(f"No candle data found for {symbol}")
                 return None
@@ -336,30 +347,37 @@ class RoomTradeBuyView(APIView):
                 logger.error(f"Empty candles array for {symbol}")
                 return None
             
-        # Get the first (latest) candle
+            # Get the first (latest) candle
             latest_candle = candles[0]
             if not latest_candle or len(latest_candle) < 5:
                 logger.error(f"Invalid candle data for {symbol}: {latest_candle}")
                 return None
             
-        # Index 4 is the close price (LTP)
+            # Index 4 is the close price (LTP)
             ltp = latest_candle[4]
+            print(f"DEBUG: LTP value: {ltp}, type: {type(ltp)}")
         
             if ltp is None or ltp <= 0:
                 logger.error(f"Invalid LTP value for {symbol}: {ltp}")
                 return None
         
-        # Return the LTP value in a dictionary format
-            return {"ltp": float(ltp)}
+            # Return the LTP value in a dictionary format
+            result = {"ltp": float(ltp)}
+            print(f"DEBUG: Final result: {result}")
+            return result
         
         except ApiException as api_error:
             logger.error(f"Upstox API error for {symbol}: {api_error}")
+            print(f"DEBUG: API Exception: {api_error}")
             return None
         except Exception as e:
             logger.error(f"Unexpected error getting LTP for {symbol}: {e}")
+            print(f"DEBUG: Unexpected error: {e}")
+            import traceback
+            print(f"DEBUG: Traceback: {traceback.format_exc()}")
             return None
-            
-            
+                
+                
         
     def get_indianapi_stock_data(self, stock_name):
         """Fetch stock data from IndianAPI"""
@@ -565,7 +583,6 @@ class RoomTradeBuyView(APIView):
             if not stock_name:
                 return Response({"error": "Stock name not found"}, status=status.HTTP_404_NOT_FOUND)
             
-            # Get current market price for all order types
             stock_data = self.get_ltp(symbol)
             if not stock_data or 'ltp' not in stock_data or stock_data['ltp'] is None or stock_data['ltp'] <= 0:
                 return Response({
