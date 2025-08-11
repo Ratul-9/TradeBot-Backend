@@ -310,6 +310,10 @@ class RoomTradeBuyView(APIView):
         api_Instance = upstox_client.HistoryV3Api()
         instrument_key = self.get_instrument_key(symbol)
 
+        if not instrument_key:
+            logger.error(f"Could not get instrument key")
+            return None
+
         try:
             resp = api_Instance.get_intra_day_candle_data(
                 instrument_key=instrument_key,
@@ -317,20 +321,43 @@ class RoomTradeBuyView(APIView):
                 unit="1"
             )
 
-            ltp = resp['data']['candles'][0][4]
+            if not resp or 'data' not in resp:
+                logger.error(f"Invalid response structure for {symbol}: {resp}")
+                return None
 
-            if not ltp:
-                return Response({"Could not get last traded price."})
+            data = resp['data']
+            if not data or 'candles' not in data or not data['candles']:
+                logger.error(f"No candle data found for {symbol}")
+                return None
             
-            return Response({"ltp:", ltp})
+            candles = data['candles']
+
+            if not candles or len(candles) == 0:
+                logger.error(f"Empty candles array for {symbol}")
+                return None
+            
+        # Get the first (latest) candle
+            latest_candle = candles[0]
+            if not latest_candle or len(latest_candle) < 5:
+                logger.error(f"Invalid candle data for {symbol}: {latest_candle}")
+                return None
+            
+        # Index 4 is the close price (LTP)
+            ltp = latest_candle[4]
+        
+            if ltp is None or ltp <= 0:
+                logger.error(f"Invalid LTP value for {symbol}: {ltp}")
+                return None
+        
+        # Return the LTP value in a dictionary format
+            return {"ltp": float(ltp)}
         
         except ApiException as api_error:
-                logger.error(f"Upstox API error for {symbol}: {api_error}")
-                return Response({
-                    "error": f"Upstox API error: {str(api_error)}",
-                    "symbol": symbol
-                }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
+            logger.error(f"Upstox API error for {symbol}: {api_error}")
+            return None
+        except Exception as e:
+            logger.error(f"Unexpected error getting LTP for {symbol}: {e}")
+            return None
             
             
         
