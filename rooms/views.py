@@ -519,7 +519,7 @@ class RoomTradeBuyView(APIView):
             if "error" in ltp_resp:
                 return Response(ltp, status=503)
             
-            ltp = ltp_resp["ltp"]
+            ltp = Decimal(str(ltp_resp["ltp"]))
             
             # Get or create user balance
             balance, created = UserBalance.objects.get_or_create(
