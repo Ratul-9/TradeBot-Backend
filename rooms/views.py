@@ -347,7 +347,7 @@ class RoomTradeBuyView(APIView):
 
             ltp = first_candle[4]
 
-            return ltp
+            return {"ltp": ltp}
 
 
 
