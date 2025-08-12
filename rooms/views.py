@@ -1527,32 +1527,80 @@ class RoomTradeSellView(APIView):
 class RoomLeaderboardView(APIView):
     permission_classes = [IsAuthenticated]
 
-    def get_stock_data(self, symbol):
-        """Fetch current stock price from IndianAPI"""
+    def get_instrument_key(self, symbol: str) -> str | None:
         try:
-            base_url = "https://stock.indianapi.in/stock"
-            params = {'name': symbol}
-            headers = {
-                "X-Api-Key": settings.INDIANAPI_KEY,
-                "Content-Type": "application/json"
-            }
+            cache_key = f"instrument_key_{symbol}"
+            instrument_key = cache.get(cache_key)
 
-            response = requests.get(base_url, headers=headers, params=params)
-            response.raise_for_status()
-            data = response.json()
+            if instrument_key:
+                return instrument_key
 
-            if not data:
-                return None
+            # First check in Stock table
+            stock = Stock.objects.filter(symbol=symbol).first()
+            if stock and stock.isin_number:
+                instrument_key = f"NSE_EQ|{stock.isin_number}"
+                cache.set(cache_key, instrument_key, 600)
+                return instrument_key
 
-            current_price = data.get('currentPrice', {})
-            ltp = current_price.get('NSE') or current_price.get('BSE')
+            # Then check SMEStock table
+            sme_stock = SMEStock.objects.filter(symbol=symbol).first()
+            if sme_stock and sme_stock.isin_number:
+                instrument_key = f"NSE_EQ|{sme_stock.isin_number}"
+                cache.set(cache_key, instrument_key, 600)
+                return instrument_key
+
+            return None
+
+        except Exception as e:
+            logger.error(f"Error fetching instrument key for {symbol}: {e}")
+            return None
+        
+
+    def get_ltp(self, symbol):
+        apiInstance = upstox_client.HistoryV3Api()
+        instrument_key = self.get_instrument_key(symbol)
+
+
+        if not instrument_key:
+            return {"error": f"Could not get instrument key for {symbol}"}
+        
+        interval_map = {
+                "1minute": ("minutes", "1"),
+                "5minute": ("minutes", "5"),
+                "15minute": ("minutes", "15"),
+                "30minute": ("minutes", "30"),
+                "1hour": ("hours", "1"),
+                "day": ("days", "1"),
+                "week": ("weeks", "1"),
+                "month": ("months", "1")
+        }
+        
+        unit, interval = interval_map["1minute"]
+
+
+        try:
+            response = apiInstance.get_intra_day_candle_data(
+                instrument_key=instrument_key,
+                interval=interval, 
+                unit=unit
+            )
+
+            candles = response.data.candles
+
+            if not candles:
+                return Response({
+                    "error": "No historical data found for the symbol",
+                    "symbol": symbol
+                }, status=404)
             
-            if ltp is None:
-                return None
+            first_candle = candles[0]
+
+            ltp = first_candle[4]
 
             return float(ltp)
-        except Exception:
-            return None
+        
+        except Exception as e:
+            return {"error": f"Exception while fetching LTP: {e}"}
 
     def calculate_user_pnl(self, user, room):
         """Calculate total P&L for a user in a room"""
@@ -1572,7 +1620,7 @@ class RoomLeaderboardView(APIView):
                 
                 # Calculate unrealized P&L if user still holds stocks
                 if portfolio.total_quantity > 0:
-                    current_price = self.get_stock_data(portfolio.symbol)
+                    current_price = self.get_ltp(portfolio.symbol)
                     if current_price:
                         current_price = Decimal(str(current_price))
                         unrealized_pnl = portfolio.calculate_unrealized_pnl(current_price)
@@ -1590,7 +1638,7 @@ class RoomLeaderboardView(APIView):
             # Calculate current portfolio value
             portfolio_value = Decimal('0.00')
             for portfolio in portfolios.filter(total_quantity__gt=0):
-                current_price = self.get_stock_data(portfolio.symbol)
+                current_price = self.get_ltp(portfolio.symbol)
                 if current_price:
                     portfolio_value += portfolio.total_quantity * Decimal(str(current_price))
                 else:
@@ -1800,9 +1848,6 @@ class StockSearchView(APIView):
 
 
 class StockDataView(APIView):
-    """
-    View to get current stock data using IndianAPI
-    """
     permission_classes = [IsAuthenticated]
 
     def get_stock_name(self, symbol):
@@ -1823,62 +1868,82 @@ class StockDataView(APIView):
         except Exception:
             return symbol
 
-    def get_indianapi_stock_data(self, stock_name):
-        """Fetch stock data from IndianAPI"""
+    def get_instrument_key(self, symbol: str) -> str | None:
         try:
-            base_url = "https://stock.indianapi.in/stock"
-            params = {'name': stock_name}
-            headers = {
-                "X-Api-Key": settings.INDIANAPI_KEY,
-                "Content-Type": "application/json"
-            }
+            cache_key = f"instrument_key_{symbol}"
+            instrument_key = cache.get(cache_key)
 
-            response = requests.get(
-                base_url,
-                headers=headers,  
-                params=params
+            if instrument_key:
+                return instrument_key
+
+            # First check in Stock table
+            stock = Stock.objects.filter(symbol=symbol).first()
+            if stock and stock.isin_number:
+                instrument_key = f"NSE_EQ|{stock.isin_number}"
+                cache.set(cache_key, instrument_key, 600)
+                return instrument_key
+
+            # Then check SMEStock table
+            sme_stock = SMEStock.objects.filter(symbol=symbol).first()
+            if sme_stock and sme_stock.isin_number:
+                instrument_key = f"NSE_EQ|{sme_stock.isin_number}"
+                cache.set(cache_key, instrument_key, 600)
+                return instrument_key
+
+            return None
+
+        except Exception as e:
+            logger.error(f"Error fetching instrument key for {symbol}: {e}")
+            return None
+        
+
+    def get_ltp(self, symbol):
+        apiInstance = upstox_client.HistoryV3Api()
+        instrument_key = self.get_instrument_key(symbol)
+
+
+        if not instrument_key:
+            return {"error": f"Could not get instrument key for {symbol}"}
+        
+        interval_map = {
+                "1minute": ("minutes", "1"),
+                "5minute": ("minutes", "5"),
+                "15minute": ("minutes", "15"),
+                "30minute": ("minutes", "30"),
+                "1hour": ("hours", "1"),
+                "day": ("days", "1"),
+                "week": ("weeks", "1"),
+                "month": ("months", "1")
+        }
+        
+        unit, interval = interval_map["1minute"]
+
+
+        try:
+            response = apiInstance.get_intra_day_candle_data(
+                instrument_key=instrument_key,
+                interval=interval, 
+                unit=unit
             )
-            response.raise_for_status()
-            data = response.json()
 
-            # Validate response structure
-            if not data:
-                return None
+            candles = response.data.candles
 
-            current_price = data.get('currentPrice', {})
+            if not candles:
+                return Response({
+                    "error": "No historical data found for the symbol",
+                    "symbol": symbol
+                }, status=404)
+            
+            first_candle = candles[0]
 
-            # Get LTP from NSE or BSE
-            ltp = current_price.get('NSE') or current_price.get('BSE')
-            if ltp is None:
-                return None
+            ltp = first_candle[4]
 
-            # Convert LTP to float safely
-            try:
-                ltp = float(ltp)
-            except (ValueError, TypeError):
-                return None
+            return {"ltp": ltp}
 
-            return {
-                'company_name': data.get('companyName', ''),
-                'industry': data.get('industry', ''),
-                'ltp': ltp,
-                'nse_price': current_price.get('NSE'),
-                'bse_price': current_price.get('BSE'),
-                'percent_change': data.get('percentChange'),
-                'year_high': data.get('yearHigh'),
-                'year_low': data.get('yearLow'),
-                'technical_data': data.get('stockTechnicalData', {}),
-                'key_metrics': data.get('keyMetrics', {}),
-            }
 
-        except requests.exceptions.Timeout:
-            return None
-        except requests.exceptions.RequestException:
-            return None
-        except (ValueError, KeyError):
-            return None
-        except Exception:
-            return None
+
+        except Exception as e:
+            return {"error": f"Exception while fetching LTP: {e}"}
 
     def get(self, request, room_id):
         """Get stock data for a symbol"""
@@ -1925,32 +1990,16 @@ class StockDataView(APIView):
             stock_name = self.get_stock_name(symbol)
             if not stock_name:
                 return Response({"Stock Name Not found"})
-            stock_data = self.get_indianapi_stock_data(symbol)
+            ltp = self.get_ltp(symbol) or ltp = UserPortfolio.average_buy_price
 
-            if not stock_data:
-                return Response({
-                    "error": "Unable to fetch current stock data. Please try again later.",
-                    "symbol": symbol,
-                    "Name": stock_name
-                }, status=status.HTTP_404_NOT_FOUND)
+            if "error" in ltp:
+                return Response(ltp, status=status.HTTP_503_SERVICE_UNAVAILABLE)
 
             # Return successful response
             return Response({
                 "success": True,
                 "symbol": symbol,
-                "company_name": stock_data['company_name'],
-                "industry": stock_data['industry'],
-                "ltp": stock_data['ltp'],
-                "current_price": {
-                    "NSE": stock_data['nse_price'],
-                    "BSE": stock_data['bse_price']
-                },
-                "percent_change": stock_data['percent_change'],
-                "year_high": stock_data['year_high'],
-                "year_low": stock_data['year_low'],
-                "technical_data": stock_data['technical_data'],
-                "key_metrics": stock_data['key_metrics'],
-                "source": "IndianAPI"
+                "ltp": ltp['ltp'],
             }, status=status.HTTP_200_OK)
 
         except Exception as e:
@@ -1965,32 +2014,82 @@ class UserPortfolioView(APIView):
     """
     permission_classes = [IsAuthenticated]
 
-    def get_stock_data(self, symbol):
-        """Fetch current stock price from IndianAPI"""
+    def get_instrument_key(self, symbol: str) -> str | None:
         try:
-            base_url = "https://stock.indianapi.in/stock"
-            params = {'name': symbol}
-            headers = {
-                "X-Api-Key": settings.INDIANAPI_KEY,
-                "Content-Type": "application/json"
-            }
+            cache_key = f"instrument_key_{symbol}"
+            instrument_key = cache.get(cache_key)
 
-            response = requests.get(base_url, headers=headers, params=params)
-            response.raise_for_status()
-            data = response.json()
+            if instrument_key:
+                return instrument_key
 
-            if not data:
-                return None
+            # First check in Stock table
+            stock = Stock.objects.filter(symbol=symbol).first()
+            if stock and stock.isin_number:
+                instrument_key = f"NSE_EQ|{stock.isin_number}"
+                cache.set(cache_key, instrument_key, 600)
+                return instrument_key
 
-            current_price = data.get('currentPrice', {})
-            ltp = current_price.get('NSE') or current_price.get('BSE')
-            
-            if ltp is None:
-                return None
+            # Then check SMEStock table
+            sme_stock = SMEStock.objects.filter(symbol=symbol).first()
+            if sme_stock and sme_stock.isin_number:
+                instrument_key = f"NSE_EQ|{sme_stock.isin_number}"
+                cache.set(cache_key, instrument_key, 600)
+                return instrument_key
 
-            return float(ltp)
-        except Exception:
             return None
+
+        except Exception as e:
+            logger.error(f"Error fetching instrument key for {symbol}: {e}")
+            return None
+        
+
+    def get_ltp(self, symbol):
+        apiInstance = upstox_client.HistoryV3Api()
+        instrument_key = self.get_instrument_key(symbol)
+
+
+        if not instrument_key:
+            return {"error": f"Could not get instrument key for {symbol}"}
+        
+        interval_map = {
+                "1minute": ("minutes", "1"),
+                "5minute": ("minutes", "5"),
+                "15minute": ("minutes", "15"),
+                "30minute": ("minutes", "30"),
+                "1hour": ("hours", "1"),
+                "day": ("days", "1"),
+                "week": ("weeks", "1"),
+                "month": ("months", "1")
+        }
+        
+        unit, interval = interval_map["1minute"]
+
+
+        try:
+            response = apiInstance.get_intra_day_candle_data(
+                instrument_key=instrument_key,
+                interval=interval, 
+                unit=unit
+            )
+
+            candles = response.data.candles
+
+            if not candles:
+                return Response({
+                    "error": "No historical data found for the symbol",
+                    "symbol": symbol
+                }, status=404)
+            
+            first_candle = candles[0]
+
+            ltp = first_candle[4]
+
+            return {"ltp": ltp}
+
+
+
+        except Exception as e:
+            return {"error": f"Exception while fetching LTP: {e}"}
 
     def get(self, request, room_id):
         try:
@@ -2020,9 +2119,10 @@ class UserPortfolioView(APIView):
             
             holdings = []
             for portfolio in portfolios:
-                current_price = self.get_stock_data(portfolio.symbol)
-                if current_price is None:
-                    current_price = float(portfolio.average_buy_price)
+                current_price_resp = self.get_ltp(portfolio.symbol)
+                current_price = current_price_resp['ltp']
+                if "error" in current_price:
+                    return Response({"Error": "Did not get ltp"})
                 
                 current_price = Decimal(str(current_price))
                 
@@ -2570,23 +2670,82 @@ class UserBalanceView(APIView):
 class AdminUserRoomDetailsView(APIView):
     permission_classes = [IsAuthenticated]
 
-    def get_stock_data(self, symbol):
+    def get_instrument_key(self, symbol: str) -> str | None:
         try:
-            base_url = "https://stock.indianapi.in/stock"
-            params = {'name': symbol}
-            headers = {
-                "X-Api-Key": settings.INDIANAPI_KEY,
-                "Content-Type": "application/json"
-            }
+            cache_key = f"instrument_key_{symbol}"
+            instrument_key = cache.get(cache_key)
 
-            response = requests.get(base_url, headers=headers, params=params)
-            response.raise_for_status()
-            data = response.json()
+            if instrument_key:
+                return instrument_key
 
-            current_price = data.get('currentPrice', {}).get('NSE') or data.get('currentPrice', {}).get('BSE')
-            return float(current_price) if current_price else None
-        except Exception:
+            # First check in Stock table
+            stock = Stock.objects.filter(symbol=symbol).first()
+            if stock and stock.isin_number:
+                instrument_key = f"NSE_EQ|{stock.isin_number}"
+                cache.set(cache_key, instrument_key, 600)
+                return instrument_key
+
+            # Then check SMEStock table
+            sme_stock = SMEStock.objects.filter(symbol=symbol).first()
+            if sme_stock and sme_stock.isin_number:
+                instrument_key = f"NSE_EQ|{sme_stock.isin_number}"
+                cache.set(cache_key, instrument_key, 600)
+                return instrument_key
+
             return None
+
+        except Exception as e:
+            logger.error(f"Error fetching instrument key for {symbol}: {e}")
+            return None
+        
+
+    def get_ltp(self, symbol):
+        apiInstance = upstox_client.HistoryV3Api()
+        instrument_key = self.get_instrument_key(symbol)
+
+
+        if not instrument_key:
+            return {"error": f"Could not get instrument key for {symbol}"}
+        
+        interval_map = {
+                "1minute": ("minutes", "1"),
+                "5minute": ("minutes", "5"),
+                "15minute": ("minutes", "15"),
+                "30minute": ("minutes", "30"),
+                "1hour": ("hours", "1"),
+                "day": ("days", "1"),
+                "week": ("weeks", "1"),
+                "month": ("months", "1")
+        }
+        
+        unit, interval = interval_map["1minute"]
+
+
+        try:
+            response = apiInstance.get_intra_day_candle_data(
+                instrument_key=instrument_key,
+                interval=interval, 
+                unit=unit
+            )
+
+            candles = response.data.candles
+
+            if not candles:
+                return Response({
+                    "error": "No historical data found for the symbol",
+                    "symbol": symbol
+                }, status=404)
+            
+            first_candle = candles[0]
+
+            ltp = first_candle[4]
+
+            return float(ltp)
+
+
+
+        except Exception as e:
+            return {"error": f"Exception while fetching LTP: {e}"}
 
     def get(self, request, room_id, username):
         try:
@@ -2626,7 +2785,7 @@ class AdminUserRoomDetailsView(APIView):
             holdings = []
 
             for portfolio in portfolios:
-                current_price = self.get_stock_data(portfolio.symbol) or float(portfolio.average_buy_price)
+                current_price = self.get_ltp(portfolio.symbol) or float(portfolio.average_buy_price)
                 current_price = Decimal(str(current_price))
 
                 investment = portfolio.total_buy_value - portfolio.total_sell_value
