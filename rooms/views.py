@@ -310,58 +310,48 @@ class RoomTradeBuyView(APIView):
         apiInstance = upstox_client.HistoryV3Api()
         instrument_key = self.get_instrument_key(symbol)
 
-        print(f"DEBUG: instrument_key = {instrument_key}")
 
         if not instrument_key:
             return {"error": f"Could not get instrument key for {symbol}"}
+        
+        interval_map = {
+                "1minute": ("minutes", "1"),
+                "5minute": ("minutes", "5"),
+                "15minute": ("minutes", "15"),
+                "30minute": ("minutes", "30"),
+                "1hour": ("hours", "1"),
+                "day": ("days", "1"),
+                "week": ("weeks", "1"),
+                "month": ("months", "1")
+        }
+        
+        unit, interval = interval_map["1minute"]
+
 
         try:
-            resp = apiInstance.get_intra_day_candle_data(
+            response = apiInstance.get_intra_day_candle_data(
                 instrument_key=instrument_key,
-                interval="5minute",  # Use "minute" for intraday
-                unit="1"
+                interval=interval, 
+                unit=unit
             )
 
-            print(f"DEBUG raw resp: {resp}")
+            candles = response.data.candles
 
-            # Convert to dict safely
-            if hasattr(resp, 'to_dict'):
-                resp_dict = resp.to_dict()
-            elif hasattr(resp, '__dict__'):
-                resp_dict = vars(resp)
-            else:
-                resp_dict = resp
+            if not candles:
+                return Response({
+                    "error": "No historical data found for the symbol",
+                    "symbol": symbol
+                }, status=404)
+            
+            first_candle = candles[0]
 
-            print(f"DEBUG resp_dict: {resp_dict}")
+            ltp = first_candle[4]
 
-            # Get data block
-            data = resp_dict.get('data')
-            if hasattr(data, 'to_dict'):
-                data = data.to_dict()
-            elif hasattr(data, '__dict__'):
-                data = vars(data)
+            return ltp
 
-            print(f"DEBUG data: {data}")
 
-            if not data or 'candles' not in data or not data['candles']:
-                return {"error": f"No candle data found for {symbol}"}
-
-            candles = data['candles']
-            latest_candle = candles[0] if candles else None
-
-            if not latest_candle or len(latest_candle) < 5:
-                return {"error": f"Invalid candle format for {symbol}"}
-
-            ltp = latest_candle[4]
-            if ltp is None or ltp <= 0:
-                return {"error": f"Invalid LTP value for {symbol}: {ltp}"}
-
-            return {"ltp": float(ltp)}
 
         except Exception as e:
-            import traceback
-            print(f"DEBUG Exception: {e}")
-            print(traceback.format_exc())
             return {"error": f"Exception while fetching LTP: {e}"}
 
 
@@ -571,13 +561,9 @@ class RoomTradeBuyView(APIView):
             if not stock_name:
                 return Response({"error": "Stock name not found"}, status=status.HTTP_404_NOT_FOUND)
             
-            stock_data = self.get_ltp(symbol)
-            if "error" in stock_data:
-                return Response(stock_data, status=503)
-
-
-
-            current_ltp = Decimal(str(stock_data['ltp']))
+            ltp = self.get_ltp(symbol)
+            if "error" in ltp:
+                return Response(ltp, status=503)
             
             # Get or create user balance
             balance, created = UserBalance.objects.get_or_create(
@@ -591,12 +577,12 @@ class RoomTradeBuyView(APIView):
             
             if order_category == "MARKET":
                 # Validate stop loss price against current price for buy orders
-                if has_stop_loss and stop_loss_trigger_price >= current_ltp:
+                if has_stop_loss and stop_loss_trigger_price >= ltp:
                     return Response({
                         "error": "Stop loss trigger price must be below the current market price for buy orders"
                     }, status=status.HTTP_400_BAD_REQUEST)
                 
-                total_cost = current_ltp * Decimal(quantity)
+                total_cost = ltp * Decimal(quantity)
 
                 # Check if user has sufficient available balance
                 if balance.available_cash_balance < total_cost:
@@ -625,10 +611,10 @@ class RoomTradeBuyView(APIView):
                     order_type=OrderBook.BUY,
                     symbol=symbol,
                     quantity=quantity,
-                    order_price=current_ltp,
+                    order_price=ltp,
                     order_category=OrderBook.MARKET,
                     order_status=OrderBook.EXECUTED, 
-                    executed_price=current_ltp,
+                    executed_price=ltp,
                     execution_timestamp=timezone.now(),
                     has_stop_loss=has_stop_loss,
                     stop_loss_trigger_price=stop_loss_trigger_price if has_stop_loss else None,
@@ -666,7 +652,7 @@ class RoomTradeBuyView(APIView):
                 )
                 if not created:
                     portfolio.stock_name = stock_name
-                portfolio.add_buy_transaction(quantity, current_ltp)
+                portfolio.add_buy_transaction(quantity, ltp)
                 portfolio.save()
 
                 # Create trade record
@@ -677,7 +663,7 @@ class RoomTradeBuyView(APIView):
                     trade_type=Trade.BUY,
                     symbol=symbol,
                     quantity=quantity,
-                    price=current_ltp,
+                    price=ltp,
                     total_value=total_cost
                 )
 
@@ -688,7 +674,7 @@ class RoomTradeBuyView(APIView):
                     "trade_id": trade.id,
                     "symbol": symbol,
                     "quantity": quantity,
-                    "executed_price": float(current_ltp),
+                    "executed_price": float(ltp),
                     "total_cost": float(total_cost),
                     "remaining_balance": float(balance.available_cash_balance)
                 }
@@ -728,10 +714,10 @@ class RoomTradeBuyView(APIView):
                     }, status=status.HTTP_400_BAD_REQUEST)
 
                 # NEW LOGIC: Check if limit price >= current LTP
-                if limit_price >= current_ltp:
+                if limit_price >= ltp:
                     # Immediate partial execution at current LTP
-                    executable_quantity = min(quantity, int(balance.available_cash_balance / current_ltp))
-                    immediate_cost = current_ltp * Decimal(executable_quantity)
+                    executable_quantity = min(quantity, int(balance.available_cash_balance / ltp))
+                    immediate_cost = ltp * Decimal(executable_quantity)
                     remaining_quantity = quantity - executable_quantity
                     
                     # Reserve total limit cost first
@@ -745,7 +731,7 @@ class RoomTradeBuyView(APIView):
                     trade = None
                     if executable_quantity > 0:
                         executed_order, trade = self.execute_partial_buy_order(
-                            user, room, symbol, executable_quantity, current_ltp, stock_name, balance
+                            user, room, symbol, executable_quantity, ltp, stock_name, balance
                         )
                         
                         if not executed_order:
@@ -798,7 +784,7 @@ class RoomTradeBuyView(APIView):
                         "total_quantity": quantity,
                         "executed_quantity": executable_quantity,
                         "pending_quantity": remaining_quantity,
-                        "executed_price": float(current_ltp) if executed_order else None,
+                        "executed_price": float(ltp) if executed_order else None,
                         "limit_price": float(limit_price),
                         "immediate_cost": float(immediate_cost) if executed_order else 0,
                         "remaining_balance": float(balance.available_cash_balance)
