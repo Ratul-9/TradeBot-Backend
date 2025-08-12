@@ -354,52 +354,6 @@ class RoomTradeBuyView(APIView):
         except Exception as e:
             return {"error": f"Exception while fetching LTP: {e}"}
 
-
-                
-        
-    def get_indianapi_stock_data(self, stock_name):
-        """Fetch stock data from IndianAPI"""
-        try:
-            base_url = "https://stock.indianapi.in/stock"
-            params = {'name': stock_name}
-            headers = {
-                "X-Api-Key": settings.INDIANAPI_KEY,
-                "Content-Type": "application/json"
-            }
-
-            response = requests.get(
-                base_url,
-                headers=headers,  
-                params=params
-            )
-            response.raise_for_status()
-            data = response.json()
-
-            # Validate response structure
-            if not data:
-                return None
-
-            current_price = data.get('currentPrice', {})
-
-            # Get LTP from NSE or BSE
-            ltp = current_price.get('NSE') or current_price.get('BSE')
-            if ltp is None:
-                return None
-
-            # Convert LTP to float safely
-            try:
-                ltp = float(ltp)
-            except (ValueError, TypeError):
-                return None
-
-            return {
-                'ltp': ltp,
-                'company_name': data.get('companyName', ''),
-            }
-
-        except Exception:
-            return None
-
     def create_stop_loss_order(self, user, room, symbol, quantity, stop_loss_trigger_price, stop_loss_limit_price, stock_name, original_order_id):
         """Create a stop loss sell order with trigger and limit price"""
         try:
@@ -562,10 +516,10 @@ class RoomTradeBuyView(APIView):
                 return Response({"error": "Stock name not found"}, status=status.HTTP_404_NOT_FOUND)
             
             ltp_resp = self.get_ltp(symbol)
-            ltp = ltp_resp["ltp"]
-            
-            if "error" in ltp:
+            if "error" in ltp_resp:
                 return Response(ltp, status=503)
+            
+            ltp = ltp_resp["ltp"]
             
             # Get or create user balance
             balance, created = UserBalance.objects.get_or_create(
