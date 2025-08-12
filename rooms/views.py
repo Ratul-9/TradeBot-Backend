@@ -1990,7 +1990,7 @@ class StockDataView(APIView):
             stock_name = self.get_stock_name(symbol)
             if not stock_name:
                 return Response({"Stock Name Not found"})
-            ltp = self.get_ltp(symbol) or ltp = UserPortfolio.average_buy_price
+            ltp = self.get_ltp(symbol)
 
             if "error" in ltp:
                 return Response(ltp, status=status.HTTP_503_SERVICE_UNAVAILABLE)
