@@ -832,48 +832,82 @@ class RoomTradeSellView(APIView):
         except Exception:
             return symbol
 
-    def get_indianapi_stock_data(self, stock_name):
-        """Fetch stock data from IndianAPI"""
+    def get_instrument_key(self, symbol: str) -> str | None:
         try:
-            base_url = "https://stock.indianapi.in/stock"
-            params = {'name': stock_name}
-            headers = {
-                "X-Api-Key": settings.INDIANAPI_KEY,
-                "Content-Type": "application/json"
-            }
+            cache_key = f"instrument_key_{symbol}"
+            instrument_key = cache.get(cache_key)
 
-            response = requests.get(
-                base_url,
-                headers=headers,  
-                params=params
-            )
-            response.raise_for_status()
-            data = response.json()
+            if instrument_key:
+                return instrument_key
 
-            # Validate response structure
-            if not data:
-                return None
+            # First check in Stock table
+            stock = Stock.objects.filter(symbol=symbol).first()
+            if stock and stock.isin_number:
+                instrument_key = f"NSE_EQ|{stock.isin_number}"
+                cache.set(cache_key, instrument_key, 600)
+                return instrument_key
 
-            current_price = data.get('currentPrice', {})
+            # Then check SMEStock table
+            sme_stock = SMEStock.objects.filter(symbol=symbol).first()
+            if sme_stock and sme_stock.isin_number:
+                instrument_key = f"NSE_EQ|{sme_stock.isin_number}"
+                cache.set(cache_key, instrument_key, 600)
+                return instrument_key
 
-            # Get LTP from NSE or BSE
-            ltp = current_price.get('NSE') or current_price.get('BSE')
-            if ltp is None:
-                return None
-
-            # Convert LTP to float safely
-            try:
-                ltp = float(ltp)
-            except (ValueError, TypeError):
-                return None
-
-            return {
-                'ltp': ltp,
-                'company_name': data.get('companyName', ''),
-            }
-
-        except Exception:
             return None
+
+        except Exception as e:
+            logger.error(f"Error fetching instrument key for {symbol}: {e}")
+            return None
+        
+
+    def get_ltp(self, symbol):
+        apiInstance = upstox_client.HistoryV3Api()
+        instrument_key = self.get_instrument_key(symbol)
+
+
+        if not instrument_key:
+            return {"error": f"Could not get instrument key for {symbol}"}
+        
+        interval_map = {
+                "1minute": ("minutes", "1"),
+                "5minute": ("minutes", "5"),
+                "15minute": ("minutes", "15"),
+                "30minute": ("minutes", "30"),
+                "1hour": ("hours", "1"),
+                "day": ("days", "1"),
+                "week": ("weeks", "1"),
+                "month": ("months", "1")
+        }
+        
+        unit, interval = interval_map["1minute"]
+
+
+        try:
+            response = apiInstance.get_intra_day_candle_data(
+                instrument_key=instrument_key,
+                interval=interval, 
+                unit=unit
+            )
+
+            candles = response.data.candles
+
+            if not candles:
+                return Response({
+                    "error": "No historical data found for the symbol",
+                    "symbol": symbol
+                }, status=404)
+            
+            first_candle = candles[0]
+
+            ltp = first_candle[4]
+
+            return {"ltp": ltp}
+
+
+
+        except Exception as e:
+            return {"error": f"Exception while fetching LTP: {e}"}
 
     def create_stop_loss_order(self, user, room, symbol, quantity, stop_loss_trigger_price, stop_loss_limit_price, stock_name, original_order_id, is_short_sell=False):
         """Create a stop loss buy order (for short positions) with trigger and limit prices"""
@@ -979,13 +1013,11 @@ class RoomTradeSellView(APIView):
             if not stock_name:
                 return Response({"error": "Stock name not found"}, status=status.HTTP_404_NOT_FOUND)
             
-            stock_data = self.get_indianapi_stock_data(symbol)
-            if not stock_data or not stock_data.get('ltp'):
-                return Response({
-                    "error": "Unable to fetch current market price. Please try again later."
-                }, status=status.HTTP_503_SERVICE_UNAVAILABLE)
-
-            current_price = Decimal(str(stock_data['ltp']))
+            ltp_resp = self.get_ltp(symbol)
+            if "error" in ltp_resp:
+                return Response(ltp, status=503)
+            
+            ltp = Decimal(str(ltp_resp["ltp"]))
 
             # Fetch or create portfolio
             portfolio, created = UserPortfolio.objects.get_or_create(
@@ -1012,7 +1044,7 @@ class RoomTradeSellView(APIView):
 
             if order_category == "MARKET":
                 # Validate stop loss price against current price
-                if has_stop_loss and stop_loss_trigger_price <= current_price:
+                if has_stop_loss and stop_loss_trigger_price <= ltp:
                     return Response({
                         "error": "Stop loss trigger price must be above the current market price for sell/short orders"
                     }, status=status.HTTP_400_BAD_REQUEST)
@@ -1027,7 +1059,7 @@ class RoomTradeSellView(APIView):
                         }, status=status.HTTP_400_BAD_REQUEST)
 
                     # Execute regular sell
-                    total_proceeds = current_price * Decimal(quantity)
+                    total_proceeds = ltp * Decimal(quantity)
 
                     # Create the sell order
                     order = OrderBook.objects.create(
@@ -1036,11 +1068,11 @@ class RoomTradeSellView(APIView):
                         order_type=OrderBook.SELL,
                         symbol=symbol,
                         quantity=quantity,
-                        order_price=current_price,
+                        order_price=ltp,
                         order_category=OrderBook.MARKET,
                         order_status=OrderBook.EXECUTED,
                         filled_quantity=quantity,
-                        executed_price=current_price,
+                        executed_price=ltp,
                         execution_timestamp=timezone.now(),
                         is_short_sell=False,
                         has_stop_loss=has_stop_loss,
@@ -1049,7 +1081,7 @@ class RoomTradeSellView(APIView):
                     )
 
                     # Execute the sell transaction in portfolio
-                    if not portfolio.add_sell_transaction(quantity, current_price):
+                    if not portfolio.add_sell_transaction(quantity, ltp):
                         return Response({"error": "Failed to update portfolio"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
                     # Add proceeds to balance
@@ -1064,7 +1096,7 @@ class RoomTradeSellView(APIView):
                         trade_type=Trade.SELL,
                         symbol=symbol,
                         quantity=quantity,
-                        price=current_price,
+                        price=ltp,
                         total_value=total_proceeds
                     )
 
@@ -1090,7 +1122,7 @@ class RoomTradeSellView(APIView):
                         "trade_id": trade.id,
                         "symbol": symbol,
                         "quantity": quantity,
-                        "executed_price": float(current_price),
+                        "executed_price": float(ltp),
                         "total_proceeds": float(total_proceeds),
                         "new_balance": float(balance.available_cash_balance),
                         "previous_balance": float(previous_balance),
@@ -1111,7 +1143,7 @@ class RoomTradeSellView(APIView):
 
                 else:
                     # Short sell - no quantity check needed
-                    total_proceeds = current_price * Decimal(quantity)
+                    total_proceeds = ltp * Decimal(quantity)
 
                     # Create the short sell order
                     order = OrderBook.objects.create(
@@ -1120,11 +1152,11 @@ class RoomTradeSellView(APIView):
                         order_type=OrderBook.SELL,
                         symbol=symbol,
                         quantity=quantity,
-                        order_price=current_price,
+                        order_price=ltp,
                         order_category=OrderBook.MARKET,
                         order_status=OrderBook.EXECUTED,
                         filled_quantity=quantity,
-                        executed_price=current_price,
+                        executed_price=ltp,
                         execution_timestamp=timezone.now(),
                                                 is_short_sell=True,
                         has_stop_loss=has_stop_loss,
@@ -1133,7 +1165,7 @@ class RoomTradeSellView(APIView):
                     )
 
                     # Add short position to portfolio
-                    portfolio.add_short_position(quantity, current_price)
+                    portfolio.add_short_position(quantity, ltp)
 
                     # Add proceeds to balance
                     previous_balance = balance.available_cash_balance
@@ -1147,7 +1179,7 @@ class RoomTradeSellView(APIView):
                         trade_type=Trade.SELL,
                         symbol=symbol,
                         quantity=quantity,
-                        price=current_price,
+                        price=ltp,
                         total_value=total_proceeds
                     )
 
@@ -1173,7 +1205,7 @@ class RoomTradeSellView(APIView):
                         "trade_id": trade.id,
                         "symbol": symbol,
                         "quantity": quantity,
-                        "executed_price": float(current_price),
+                        "executed_price": float(ltp),
                         "total_proceeds": float(total_proceeds),
                         "new_balance": float(balance.available_cash_balance),
                         "previous_balance": float(previous_balance),
@@ -1221,7 +1253,7 @@ class RoomTradeSellView(APIView):
                     }, status=status.HTTP_400_BAD_REQUEST)
 
                 # Check if immediate execution is possible (LTP >= limit price for sell)
-                if current_price >= limit_price:
+                if ltp >= limit_price:
                     # Immediate execution at current price
                     if not is_short_sell:
                         # Regular sell - check quantity
@@ -1241,7 +1273,7 @@ class RoomTradeSellView(APIView):
                             remaining_quantity = 0
 
                         # Execute immediate portion
-                        immediate_proceeds = current_price * Decimal(quantity_to_execute)
+                        immediate_proceeds = ltp * Decimal(quantity_to_execute)
 
                         # Create the order
                         order = OrderBook.objects.create(
@@ -1254,7 +1286,7 @@ class RoomTradeSellView(APIView):
                             order_category=OrderBook.LIMIT,
                             order_status=OrderBook.PARTIALLY_EXECUTED if remaining_quantity > 0 else OrderBook.EXECUTED,
                             filled_quantity=quantity_to_execute,
-                            executed_price=current_price,
+                            executed_price=ltp,
                             execution_timestamp=timezone.now() if quantity_to_execute > 0 else None,
                             partially_executed_quantity=quantity_to_execute,
                             remaining_quantity=remaining_quantity,
@@ -1266,7 +1298,7 @@ class RoomTradeSellView(APIView):
 
                         # Execute the sell transaction
                         if quantity_to_execute > 0:
-                            portfolio.add_sell_transaction(quantity_to_execute, current_price)
+                            portfolio.add_sell_transaction(quantity_to_execute, ltp)
                             balance.add_cash(immediate_proceeds)
 
                             # Create trade record
@@ -1277,7 +1309,7 @@ class RoomTradeSellView(APIView):
                                 trade_type=Trade.SELL,
                                 symbol=symbol,
                                 quantity=quantity_to_execute,
-                                price=current_price,
+                                price=ltp,
                                 total_value=immediate_proceeds
                             )
 
@@ -1298,13 +1330,13 @@ class RoomTradeSellView(APIView):
 
                         response_data = {
                             "success": True,
-                            "message": f"Limit sell order: {quantity_to_execute} shares executed at {float(current_price)}" + 
+                            "message": f"Limit sell order: {quantity_to_execute} shares executed at {float(ltp)}" + 
                                       (f", {remaining_quantity} shares pending" if remaining_quantity > 0 else ""),
                             "order_id": order.id,
                             "symbol": symbol,
                             "total_quantity": quantity,
                             "executed_quantity": quantity_to_execute,
-                            "executed_price": float(current_price) if quantity_to_execute > 0 else None,
+                            "executed_price": float(ltp) if quantity_to_execute > 0 else None,
                             "remaining_quantity": remaining_quantity,
                             "limit_price": float(limit_price),
                             "immediate_proceeds": float(immediate_proceeds) if quantity_to_execute > 0 else 0,
@@ -1331,7 +1363,7 @@ class RoomTradeSellView(APIView):
 
                     else:
                         # Short sell - immediate execution
-                        immediate_proceeds = current_price * Decimal(quantity)
+                        immediate_proceeds = ltp * Decimal(quantity)
 
                         # Create the order
                         order = OrderBook.objects.create(
@@ -1344,7 +1376,7 @@ class RoomTradeSellView(APIView):
                             order_category=OrderBook.LIMIT,
                             order_status=OrderBook.EXECUTED,
                             filled_quantity=quantity,
-                            executed_price=current_price,
+                            executed_price=ltp,
                             execution_timestamp=timezone.now(),
                             is_short_sell=True,
                             has_stop_loss=has_stop_loss,
@@ -1353,7 +1385,7 @@ class RoomTradeSellView(APIView):
                         )
 
                         # Add short position
-                        portfolio.add_short_position(quantity, current_price)
+                        portfolio.add_short_position(quantity, ltp)
                         balance.add_cash(immediate_proceeds)
 
                         # Create trade record
@@ -1364,7 +1396,7 @@ class RoomTradeSellView(APIView):
                             trade_type=Trade.SELL,
                             symbol=symbol,
                             quantity=quantity,
-                            price=current_price,
+                            price=ltp,
                             total_value=immediate_proceeds
                         )
 
@@ -1390,7 +1422,7 @@ class RoomTradeSellView(APIView):
                             "trade_id": trade.id,
                             "symbol": symbol,
                             "quantity": quantity,
-                            "executed_price": float(current_price),
+                            "executed_price": float(ltp),
                             "limit_price": float(limit_price),
                             "total_proceeds": float(immediate_proceeds),
                             "new_balance": float(balance.available_cash_balance),
@@ -1459,7 +1491,7 @@ class RoomTradeSellView(APIView):
                         "symbol": symbol,
                         "quantity": quantity,
                         "limit_price": float(limit_price),
-                        "current_ltp": float(current_price),
+                        "current_ltp": float(ltp),
                         "order_status": "PENDING",
                         "is_short_sell": is_short_sell
                     }
