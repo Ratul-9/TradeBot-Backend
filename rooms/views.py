@@ -561,7 +561,9 @@ class RoomTradeBuyView(APIView):
             if not stock_name:
                 return Response({"error": "Stock name not found"}, status=status.HTTP_404_NOT_FOUND)
             
-            ltp = self.get_ltp(symbol)
+            ltp_resp = self.get_ltp(symbol)
+            ltp = ltp_resp["ltp"]
+            
             if "error" in ltp:
                 return Response(ltp, status=503)
             
