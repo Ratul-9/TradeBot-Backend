@@ -2047,7 +2047,6 @@ class UserPortfolioView(APIView):
         apiInstance = upstox_client.HistoryV3Api()
         instrument_key = self.get_instrument_key(symbol)
 
-
         if not instrument_key:
             return {"error": f"Could not get instrument key for {symbol}"}
         
@@ -2064,7 +2063,6 @@ class UserPortfolioView(APIView):
         
         unit, interval = interval_map["1minute"]
 
-
         try:
             response = apiInstance.get_intra_day_candle_data(
                 instrument_key=instrument_key,
@@ -2075,18 +2073,12 @@ class UserPortfolioView(APIView):
             candles = response.data.candles
 
             if not candles:
-                return Response({
-                    "error": "No historical data found for the symbol",
-                    "symbol": symbol
-                }, status=404)
+                return {"error": "No historical data found for the symbol"}
             
             first_candle = candles[0]
-
             ltp = first_candle[4]
 
             return {"ltp": ltp}
-
-
 
         except Exception as e:
             return {"error": f"Exception while fetching LTP: {e}"}
@@ -2120,11 +2112,14 @@ class UserPortfolioView(APIView):
             holdings = []
             for portfolio in portfolios:
                 current_price_resp = self.get_ltp(portfolio.symbol)
-                current_price = current_price_resp['ltp']
-                if "error" in current_price:
-                    return Response({"Error": "Did not get ltp"})
                 
-                current_price = Decimal(str(current_price))
+                # Check for errors in the response, not in the LTP value
+                if "error" in current_price_resp:
+                    return Response({
+                        "error": f"Could not get LTP for {portfolio.symbol}: {current_price_resp['error']}"
+                    }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+                
+                current_price = Decimal(str(current_price_resp['ltp']))
                 
                 # Calculate values
                 investment = portfolio.total_buy_value - portfolio.total_sell_value
