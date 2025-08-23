@@ -2726,10 +2726,7 @@ class AdminUserRoomDetailsView(APIView):
             candles = response.data.candles
 
             if not candles:
-                return Response({
-                    "error": "No historical data found for the symbol",
-                    "symbol": symbol
-                }, status=404)
+                return None
             
             first_candle = candles[0]
 
