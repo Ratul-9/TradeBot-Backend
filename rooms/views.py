@@ -2780,8 +2780,12 @@ class AdminUserRoomDetailsView(APIView):
             holdings = []
 
             for portfolio in portfolios:
-                current_price = self.get_ltp(portfolio.symbol) or float(portfolio.average_buy_price)
-                current_price = Decimal(str(current_price))
+                ltp_result = self.get_ltp(portfolio.symbol)
+                if isinstance(ltp_result, dict) and 'error' in ltp_result:
+        
+                    current_price = Decimal(str(portfolio.average_buy_price))
+                else:
+                    current_price = Decimal(str(ltp_result))
 
                 investment = portfolio.total_buy_value - portfolio.total_sell_value
                 current_value = portfolio.total_quantity * current_price
