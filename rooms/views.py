@@ -2050,39 +2050,32 @@ class UserPortfolioView(APIView):
         if not instrument_key:
             return {"error": f"Could not get instrument key for {symbol}"}
         
-        interval_map = {
-                "1minute": ("minutes", "1"),
-                "5minute": ("minutes", "5"),
-                "15minute": ("minutes", "15"),
-                "30minute": ("minutes", "30"),
-                "1hour": ("hours", "1"),
-                "day": ("days", "1"),
-                "week": ("weeks", "1"),
-                "month": ("months", "1")
-        }
+        # Try 1-minute data first, then fall back to daily data
+        intervals_to_try = [
+            ("minutes", "1"),
+            ("days", "1")
+        ]
         
-        unit, interval = interval_map["1minute"]
+        for unit, interval in intervals_to_try:
+            try:
+                response = apiInstance.get_intra_day_candle_data(
+                    instrument_key=instrument_key,
+                    interval=interval, 
+                    unit=unit
+                )
 
-        try:
-            response = apiInstance.get_intra_day_candle_data(
-                instrument_key=instrument_key,
-                interval=interval, 
-                unit=unit
-            )
+                candles = response.data.candles
 
-            candles = response.data.candles
-
-            if not candles:
-                return {"error": "No historical data found for the symbol"}
-            
-            first_candle = candles[0]
-            ltp = first_candle[4]
-
-            return {"ltp": ltp}
-
-        except Exception as e:
-            return {"error": f"Exception while fetching LTP: {e}"}
-
+                if candles:
+                    first_candle = candles[0]
+                    ltp = first_candle[4]  # Close price
+                    return {"ltp": ltp}
+                    
+            except Exception as e:
+                logger.error(f"Error fetching {unit} data for {symbol}: {e}")
+                continue
+        
+        return {"error": "No historical data found for the symbol"}
     def get(self, request, room_id):
         try:
             room = Room.objects.filter(id=room_id).first()
