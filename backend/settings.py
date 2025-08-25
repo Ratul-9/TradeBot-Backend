@@ -47,6 +47,7 @@ INSTALLED_APPS = [
     'django_celery_beat',
     'rest_framework_simplejwt.token_blacklist',
     'corsheaders',
+    'django_celery_results',
     'users',
     'stocks',
     'transactions',
