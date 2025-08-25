@@ -8,9 +8,6 @@ app = Celery('backend')
 app.config_from_object('django.conf:settings', namespace='CELERY')
 app.autodiscover_tasks()
 
-app.conf.beat_schedule = {
-    'execute-orders-every-2-seconds': {
-        'task': 'rooms.tasks.execute_pending_orders',
-        'schedule': 2.0,
-    },
-}
+@app.task(bind=True)
+def debug_task(self):
+    print(f"Request: {self.request!r}")
