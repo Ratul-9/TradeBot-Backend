@@ -247,7 +247,6 @@ class UserPortfolio(models.Model):
             self.short_quantity = quantity
             self.average_short_price = price
         
-        self.total_short_value += short_value
         self.save()
     
     def cover_short_position(self, quantity, price):
@@ -267,12 +266,17 @@ class UserPortfolio(models.Model):
             # If all shorts covered, reset average
             if self.short_quantity == 0:
                 self.average_short_price = Decimal('0.00')
-                self.total_short_value = Decimal('0.00')
             
             self.save()
             return True
         return False
 
+
+    @property
+    def total_short_value(self):
+        return self.short_quantity * self.average_short_price
+    
+    
     @property
     def available_quantity(self):
         """Available quantity = Total quantity - Reserved quantity"""
