@@ -1999,6 +1999,7 @@ class StockDataView(APIView):
             return Response({
                 "success": True,
                 "symbol": symbol,
+                "company_name": stock_name,
                 "ltp": ltp['ltp'],
             }, status=status.HTTP_200_OK)
 
