@@ -55,6 +55,8 @@ INSTALLED_APPS = [
     'channels',
 ]
 
+
+CELERY_RESULT_BACKEND='TradeBotDB'
 ASGI_APPLICATION = "tradebot-backend.asgi.application"
 
 AUTH_USER_MODEL = 'users.CustomUser'
