@@ -56,7 +56,7 @@ INSTALLED_APPS = [
 ]
 
 
-CELERY_RESULT_BACKEND='TradeBotDB'
+CELERY_RESULT_BACKEND='djano-db'
 ASGI_APPLICATION = "tradebot-backend.asgi.application"
 
 AUTH_USER_MODEL = 'users.CustomUser'
