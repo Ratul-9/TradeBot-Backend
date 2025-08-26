@@ -2303,7 +2303,7 @@ class IntradayOrdersView(APIView):
                     "symbol": order.symbol,
                     "stock_name": getattr(order, 'stock_name', order.symbol),  # If stock_name exists
                     "quantity": order.quantity,
-                    "sell_price": float(order.price),
+                    "sell_price": float(order.order_price),
                     "current_price": float(current_price),
                     "order_value": float(order_value),
                     "potential_pnl": float(potential_pnl),
