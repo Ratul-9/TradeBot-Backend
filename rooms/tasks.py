@@ -1,8 +1,17 @@
+from functools import cache
+import time
 from celery import shared_task
-from .models import OrderBook, MarketData, UserBalance, UserPortfolio, Trade
+from requests import Response
+import upstox_client
+from .models import OrderBook, MarketData, RoomParticipant, SMEStock, Stock, UserBalance, UserPortfolio, Trade
 from django.utils import timezone
 from decimal import Decimal
 from .models import Room
+import pytz
+import logging
+from rest_framework import permissions, status
+
+logger  = logging.getLogger(__name__)
 
 @shared_task
 def execute_pending_orders():
@@ -172,3 +181,248 @@ def execute_pending_orders():
                         price=ltp,
                         total_value=total_value
                     )
+
+class ShortSellService:
+    def get_instrument_key(self, symbol: str) -> str | None:
+        try:
+            cache_key = f"instrument_key_{symbol}"
+            instrument_key = cache.get(cache_key)
+
+            if instrument_key:
+                return instrument_key
+
+            # First check in Stock table
+            stock = Stock.objects.filter(symbol=symbol).first()
+            if stock and stock.isin_number:
+                instrument_key = f"NSE_EQ|{stock.isin_number}"
+                cache.set(cache_key, instrument_key, 600)
+                return instrument_key
+
+            # Then check SMEStock table
+            sme_stock = SMEStock.objects.filter(symbol=symbol).first()
+            if sme_stock and sme_stock.isin_number:
+                instrument_key = f"NSE_EQ|{sme_stock.isin_number}"
+                cache.set(cache_key, instrument_key, 600)
+                return instrument_key
+
+            return None
+
+        except Exception as e:
+            logger.error(f"Error fetching instrument key for {symbol}: {e}")
+            return None
+        
+
+    def get_ltp(self, symbol):
+        apiInstance = upstox_client.HistoryV3Api()
+        instrument_key = self.get_instrument_key(symbol)
+
+        if not instrument_key:
+            return {"error": f"Could not get instrument key for {symbol}"}
+        
+        # Try 1-minute data first, then fall back to daily data
+        intervals_to_try = [
+            ("minutes", "1"),
+            ("days", "1")
+        ]
+        
+        for unit, interval in intervals_to_try:
+            try:
+                response = apiInstance.get_intra_day_candle_data(
+                    instrument_key=instrument_key,
+                    interval=interval, 
+                    unit=unit
+                )
+
+                candles = response.data.candles
+
+                if candles:
+                    first_candle = candles[0]
+                    ltp = first_candle[4]  # Close price
+                    return {"ltp": ltp}
+                    
+            except Exception as e:
+                logger.error(f"Error fetching {unit} data for {symbol}: {e}")
+                continue
+        
+        return {"error": "No historical data found for the symbol"}
+    
+
+    def calculate_borrowing_cost(self, order, days_held):
+        annual_borrowing_rate = Decimal('0.08')
+        daily_rate = annual_borrowing_rate / 365
+
+        position_value = order.order_price * order.quantity
+        borrowing_cost = position_value * daily_rate * days_held
+
+        return borrowing_cost
+    
+    def is_market_open(self):
+        ist = pytz.timezone('Asia/Kolkata')
+        current_time_ist = timezone.now().astimezone(ist)
+
+        if current_time_ist.weekday() > 4:
+            return False, "weekend"
+        
+        market_open = time(9, 15)
+        market_close = time(15, 15)
+        current_time_only = current_time_ist.time()
+
+
+        if current_time_only < market_open or current_time_only > market_close:
+            return False, "outside_market_hours"
+        
+        return True, "market_open"
+    
+    def get_open_short_positions(self):
+        
+        try:
+            current_date = timezone.now().date()
+            short_orders = OrderBook.objects.filter(is_short_sell = True, order_timestamp = current_date)
+
+            return short_orders
+        
+        except Exception as e:
+            return e
+    
+    def calculate_pnl(self, short_order):
+        days_held = (timezone.now() - short_order.order_timestamp).days
+
+        if days_held == 0:
+            days_held = 1
+        
+        ltp_resp = self.get_ltp(short_order.symbol)
+        ltp = Decimal(str(ltp_resp["ltp"]))        
+
+
+        gross_pnl = (short_order.order_price - ltp) * short_order.quantity
+        borrowing_cost = self.calculate_borrowing_cost(short_order, days_held)
+        position_value = short_order.order_price * short_order.quantity
+        transaction_cost = (position_value + ltp * short_order.quantity) * Decimal('0.001')
+        net_pnl = gross_pnl - borrowing_cost - transaction_cost
+
+        return {
+            'gross_pnl': gross_pnl,
+            'borrowing_cost': borrowing_cost,
+            'transaction_cost': transaction_cost,
+            'net_pnl': net_pnl,
+            'days_held': days_held
+        }
+    
+    def squre_off_positions(self, short_order):
+        try:
+            ltp_resp = self.get_ltp(short_order.symbol)
+            ltp = Decimal(str(ltp_resp["ltp"]))        
+
+            if not ltp:
+                raise ValueError(f"Could not get LTP for {short_order.symbol}")
+            
+            pnl_data = self.calculate_pnl(short_order=short_order)
+            
+            square_off_order = OrderBook.objects.create(
+                user = short_order.user,
+                room = short_order.room,
+                symbol = short_order.symbol,
+                order_type = OrderBook.BUY,
+                order_category = OrderBook.MARKET,
+                quantity = short_order.quantity,
+                order_price = ltp,
+                is_short_sell = False,
+                order_status = OrderBook.EXECUTED,
+                order_timestamp = short_order.order_timestamp,
+                execution_timestamp = timezone.now()
+            )
+
+            short_order.order_status = OrderBook.EXECUTED
+            short_order.execution_timestamp = timezone.now()
+            short_order.save()
+
+            self.update_portfolio_after_square_off(short_order, pnl_data['net_pnl'])
+
+            self.update_balance_after_square_off(short_order, pnl_data['net_pnl'])
+
+            return {
+                'success': True,
+                'square_off_order_id': square_off_order.id,
+                'pnl': pnl_data['net_pnl'],
+            }
+
+        except Exception as e:
+            logger.error(f"Error squaring off position {short_order.id}: {str(e)}")
+            return {'success': False, 'error': str(e)}
+    
+
+    def update_portfolio_after_square_off(self, short_order, net_pnl):
+        try:
+            ltp_resp = self.get_ltp(short_order.symbol)
+            ltp = Decimal(str(ltp_resp["ltp"])) 
+
+            portfolio = UserPortfolio.objects.get(user = short_order.user, room=short_order.room, symbol=short_order.symbol)
+            portfolio.total_buy_value += ltp * short_order.quantity
+            portfolio.total_quantity -= short_order.quantity
+            portfolio.realized_pnl += net_pnl
+            portfolio.save()
+
+        except UserPortfolio.DoesNotExist:
+            logger.warning(f"Portfolio not found for {short_order.user.username} - {short_order.symbol}")
+    
+
+    def update_balance_after_square_off(self, short_order, net_pnl):
+        try:
+            balance = UserBalance.objects.get(user = short_order.user, room=short_order.room)
+
+            balance.available_cash_balance += net_pnl
+
+            position_value = short_order.order_price * short_order.quantity
+            margin_released = position_value * Decimal('0.02')
+            balance.available_cash_balance += margin_released
+            balance.save()
+        except UserBalance.DoesNotExist:
+            logger.warning(f"Balance not found for {short_order.user.username}")
+
+    def bulk_square_off(self, short_orders):
+        results = {
+            'total_positions': short_orders.count(),
+            'squared_off': 0,
+            'failed': 0,
+            'errors': []
+        }
+
+        for short_order in short_orders:
+            result = self.squre_off_positions(short_order)
+            if result['success']:
+                results['squared_off'] += 1
+                logger.info(f"Squared off {short_order.symbol} for {short_order.user.username}")
+            else:
+                results['failed'] += 1
+                results['errors'].append({
+                    'order_id': short_order.id,
+                    'symbol': short_order.symbol,
+                    'error': result['error']
+                })
+        return results
+
+
+@shared_task
+def auto_square_off_short_sells():
+    service = ShortSellService()
+
+    is_open, reason = service.is_market_open()
+    if not  is_open:
+        return {"status": "skipped", "reason": reason}
+    
+
+
+    
+    open_postions = service.get_open_short_positions()
+    results = service.bulk_square_off(open_postions)
+    results["status"] = "completed"
+    results["timestamp"] = timezone.now().isoformat()
+    
+    logger.info(f"Auto square-off completed: {results}")
+    return results
+    
+
+
+
+
+     

@@ -265,5 +265,10 @@ CELERY_BEAT_SCHEDULE = {
     'execute-orders-every-2-seconds': {
         'task': 'rooms.tasks.execute_pending_orders',
         'schedule': 2.0,
+    },
+    'auto_square_off_short_sells': {
+        'task': 'rooms.tasks.auto_square_off_short_sells',
+        'schedule': crontab(minute='*/30', hour='9-15', day_of_week='1-5'),
+        'options': {'timezone': 'Asia/Kolkata'}
     }
 }
