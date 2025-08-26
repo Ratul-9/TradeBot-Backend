@@ -2283,7 +2283,7 @@ class IntradayOrdersView(APIView):
                 if "error" in current_price_resp:
                     # Skip this order if we can't get current price
                     logger.warning(f"Could not get LTP for {order.symbol}: {current_price_resp['error']}")
-                    current_price = order.price  # Use order price as fallback
+                    current_price = order.order_price 
                     potential_pnl = Decimal('0.00')
                 else:
                     current_price = Decimal(str(current_price_resp['ltp']))
