@@ -2269,7 +2269,7 @@ class IntradayOrdersView(APIView):
                 room=room,
                 is_short_sell=True,  # or 'SHORT_SELL' based on your model
                 # Add additional filters if needed for short sell identification
-            ).order_by('-created_at')
+            ).order_by('-order_timestamp')
 
             total_short_sell_value = Decimal('0.00')
             total_short_sell_quantity = 0
@@ -2311,7 +2311,7 @@ class IntradayOrdersView(APIView):
                     "order_status": order.order_status,
                     "order_date": order.order_timestamp.isoformat(),
                     "order_time": order.order_timestamp.strftime('%H:%M:%S'),
-                    "days_held": (timezone.now() - order.created_at).days,
+                    "days_held": (timezone.now() - order.order_timestamp).days,
                 })
 
             # Calculate summary statistics
