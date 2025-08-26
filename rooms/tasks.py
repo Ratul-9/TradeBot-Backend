@@ -16,6 +16,8 @@ logger  = logging.getLogger(__name__)
 @shared_task
 def execute_pending_orders():
     logger.warning("Running execute_pending_orders at %s", timezone.now())
+    print(">>> Running execute_pending_orders task <<<")
+
 
     symbols = MarketData.objects.values_list('symbol', flat=True).distinct()
 
