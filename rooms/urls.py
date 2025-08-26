@@ -52,7 +52,7 @@ urlpatterns = [
     
     # Portfolio and orders
     path('<int:room_id>/portfolio/', UserPortfolioView.as_view(), name='user-portfolio'), #Working
-    path('<int:room_id>/intradyorders/', IntradayOrdersView.as_view(), name='intraday-orders'),
+    path('<int:room_id>/intradayorders/', IntradayOrdersView.as_view(), name='intraday-orders'),
     path('<int:room_id>/orders/', OrderHistoryView.as_view(), name='order-history'), #Working
     path('<int:room_id>/pending-orders/', PendingOrdersView.as_view(), name='pending-orders'),
     # path('<int:room_id>/orders/<int:order_id>/cancel/', CancelOrderView.as_view(), name='cancel-order'),
