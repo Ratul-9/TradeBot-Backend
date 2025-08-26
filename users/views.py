@@ -175,6 +175,7 @@ class GetUserBalance(APIView):
             "is_superuser": user.is_superuser
         })
 
+from django.shortcuts import redirect
 class VerifyEmailView(APIView):
     """
     Email verification endpoint
@@ -218,14 +219,7 @@ class VerifyEmailView(APIView):
                 user.save()
                 logger.info(f"User {user.email} successfully verified")
                 
-                return HttpResponse(
-                    '<div style="text-align: center; font-family: Arial, sans-serif; margin-top: 50px;">'
-                    '<h2 style="color: #28a745;">Email successfully verified!</h2>'
-                    '<p>Your account has been activated. You may now log in.</p>'
-                    '<p><strong>Role:</strong> ' + user.role.title() + '</p>'
-                    '</div>', 
-                    status=200
-                )
+                return redirect("http://65.1.132.156/")
             else:
                 logger.warning(f"Invalid or expired token for user: {user.email}")
                 return HttpResponse(
