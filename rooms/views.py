@@ -2177,6 +2177,183 @@ class UserPortfolioView(APIView):
             return Response({
                 "error": f"An error occurred: {str(e)}"
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        
+class IntradayOrdersView(APIView):
+    """
+    API view to get all short sell orders with their details
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get_instrument_key(self, symbol: str) -> str | None:
+        try:
+            cache_key = f"instrument_key_{symbol}"
+            instrument_key = cache.get(cache_key)
+
+            if instrument_key:
+                return instrument_key
+
+            # First check in Stock table
+            stock = Stock.objects.filter(symbol=symbol).first()
+            if stock and stock.isin_number:
+                instrument_key = f"NSE_EQ|{stock.isin_number}"
+                cache.set(cache_key, instrument_key, 600)
+                return instrument_key
+
+            # Then check SMEStock table
+            sme_stock = SMEStock.objects.filter(symbol=symbol).first()
+            if sme_stock and sme_stock.isin_number:
+                instrument_key = f"NSE_EQ|{sme_stock.isin_number}"
+                cache.set(cache_key, instrument_key, 600)
+                return instrument_key
+
+            return None
+
+        except Exception as e:
+            logger.error(f"Error fetching instrument key for {symbol}: {e}")
+            return None
+
+    def get_ltp(self, symbol):
+        apiInstance = upstox_client.HistoryV3Api()
+        instrument_key = self.get_instrument_key(symbol)
+
+        if not instrument_key:
+            return {"error": f"Could not get instrument key for {symbol}"}
+        
+        # Try 1-minute data first, then fall back to daily data
+        intervals_to_try = [
+            ("minutes", "1"),
+            ("days", "1")
+        ]
+        
+        for unit, interval in intervals_to_try:
+            try:
+                response = apiInstance.get_intra_day_candle_data(
+                    instrument_key=instrument_key,
+                    interval=interval, 
+                    unit=unit
+                )
+
+                candles = response.data.candles
+
+                if candles:
+                    first_candle = candles[0]
+                    ltp = first_candle[4]  # Close price
+                    return {"ltp": ltp}
+                    
+            except Exception as e:
+                logger.error(f"Error fetching {unit} data for {symbol}: {e}")
+                continue
+        
+        return {"error": "No historical data found for the symbol"}
+
+    def get(self, request, room_id):
+        try:
+            room = Room.objects.filter(id=room_id).first()
+            if not room:
+                return Response({"error": "Room not found"}, status=status.HTTP_404_NOT_FOUND)
+
+            participant = RoomParticipant.objects.filter(
+                user=request.user, 
+                room=room, 
+                is_active=True
+            ).first()
+            if not participant:
+                return Response({
+                    "error": "You are not an active participant in this room"
+                }, status=status.HTTP_403_FORBIDDEN)
+
+            # Get all short sell orders for the user in this room
+            # Assuming there's an Order model with transaction_type field
+            short_sell_orders = OrderBook.objects.filter(
+                user=request.user,
+                room=room,
+                is_short_sell=True,  # or 'SHORT_SELL' based on your model
+                # Add additional filters if needed for short sell identification
+            ).order_by('-created_at')
+
+            total_short_sell_value = Decimal('0.00')
+            total_short_sell_quantity = 0
+            total_potential_pnl = Decimal('0.00')
+            
+            orders_data = []
+            
+            for order in short_sell_orders:
+                current_price_resp = self.get_ltp(order.symbol)
+                
+                if "error" in current_price_resp:
+                    # Skip this order if we can't get current price
+                    logger.warning(f"Could not get LTP for {order.symbol}: {current_price_resp['error']}")
+                    current_price = order.price  # Use order price as fallback
+                    potential_pnl = Decimal('0.00')
+                else:
+                    current_price = Decimal(str(current_price_resp['ltp']))
+                    # For short sell: PnL = (sell_price - current_price) * quantity
+                    potential_pnl = (order.order_price - current_price) * order.quantity
+
+                # Calculate order value
+                order_value = order.order_price * order.quantity
+                
+                # Update totals
+                total_short_sell_value += order_value
+                total_short_sell_quantity += order.quantity
+                total_potential_pnl += potential_pnl
+                
+                orders_data.append({
+                    "order_id": order.id,
+                    "symbol": order.symbol,
+                    "stock_name": getattr(order, 'stock_name', order.symbol),  # If stock_name exists
+                    "quantity": order.quantity,
+                    "sell_price": float(order.price),
+                    "current_price": float(current_price),
+                    "order_value": float(order_value),
+                    "potential_pnl": float(potential_pnl),
+                    "pnl_percentage": float(((potential_pnl / order_value) * 100) if order_value > 0 else 0),
+                    "order_status": order.order_status,
+                    "order_date": order.order_timestamp.isoformat(),
+                    "order_time": order.order_timestamp.strftime('%H:%M:%S'),
+                    "days_held": (timezone.now() - order.created_at).days,
+                })
+
+            # Calculate summary statistics
+            average_sell_price = float(total_short_sell_value / total_short_sell_quantity) if total_short_sell_quantity > 0 else 0
+            overall_pnl_percentage = float((total_potential_pnl / total_short_sell_value * 100) if total_short_sell_value > 0 else 0)
+
+            short_sell_summary = {
+                "total_short_positions": len(orders_data),
+                "total_quantity_shorted": total_short_sell_quantity,
+                "total_short_sell_value": float(total_short_sell_value),
+                "total_potential_pnl": float(total_potential_pnl),
+                "overall_pnl_percentage": overall_pnl_percentage,
+                "average_sell_price": average_sell_price,
+                "covered_positions": len([order for order in orders_data if order.get('is_covered', False)]),
+                "uncovered_positions": len([order for order in orders_data if not order.get('is_covered', False)]),
+            }
+
+            # Get user balance info
+            balance = UserBalance.objects.filter(user=request.user, room=room).first()
+            if balance:
+                short_sell_summary["available_cash"] = float(balance.available_cash_balance)
+                short_sell_summary["margin_used"] = float(total_short_sell_value * Decimal('0.20'))  # Assuming 20% margin
+
+            return Response({
+                "short_sell_summary": short_sell_summary,
+                "short_sell_orders": orders_data,
+                "room": {
+                    "id": room.id,
+                    "name": room.name,
+                    "is_active": not room.is_closed
+                },
+                "user": {
+                    "id": request.user.id,
+                    "username": request.user.username
+                }
+            }, status=status.HTTP_200_OK)
+
+        except Exception as e:
+            logger.error(f"Error in ShortSellOrdersView: {str(e)}")
+            return Response({
+                "error": f"An error occurred: {str(e)}"
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 class OrderHistoryView(APIView):
     """
