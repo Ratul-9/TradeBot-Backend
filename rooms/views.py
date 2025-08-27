@@ -18,6 +18,8 @@ from .utils import check_and_close_room
 from .models import UserPortfolio
 from decimal import Decimal, InvalidOperation
 from django.db.models import Sum, F, Case, When, DecimalField
+import pytz
+from datetime import datetime, timedelta
 from django.db.models import ExpressionWrapper
 from .models import Stock, SMEStock
 from django.db.models import Q
@@ -338,10 +340,39 @@ class RoomTradeBuyView(APIView):
             candles = response.data.candles
 
             if not candles:
-                return Response({
-                    "error": "No historical data found for the symbol",
-                    "symbol": symbol
-                }, status=404)
+                ist = pytz.timezone('Asia/Kolkata')
+                today = datetime.now(ist)
+                to_date = today.strftime('%Y-%m-%d')
+                one_day_ago = today - timedelta(days=1)
+                from_date = one_day_ago.strftime('%Y-%m-%d')
+                response = apiInstance.get_historical_candle_data1(
+                    instrument_key=instrument_key,
+                    interval=interval,
+                    unit=unit,
+                    from_date=from_date,
+                    to_date=to_date
+                )
+
+                candles = response.data.candles
+                if not candles:
+                    ist = pytz.timezone('Asia/Kolkata')
+                    today = datetime.now(ist)
+                    to_date = today.strftime('%Y-%m-%d')
+                    three_days_ago = today - timedelta(days=3)
+                    from_date = one_day_ago.strftime('%Y-%m-%d')
+                    response = apiInstance.get_historical_candle_data1(
+                        instrument_key=instrument_key,
+                        interval=interval,
+                        unit=unit,
+                        from_date=from_date,
+                        to_date=to_date
+                    )
+
+                    candles = response.data.candles
+            
+            if not candles:
+                return Response({"Could not get historical data for the symbol"}) 
+
             
             first_candle = candles[0]
 
@@ -893,18 +924,45 @@ class RoomTradeSellView(APIView):
             candles = response.data.candles
 
             if not candles:
-                return Response({
-                    "error": "No historical data found for the symbol",
-                    "symbol": symbol
-                }, status=404)
+                ist = pytz.timezone('Asia/Kolkata')
+                today = datetime.now(ist)
+                to_date = today.strftime('%Y-%m-%d')
+                one_day_ago = today - timedelta(days=1)
+                from_date = one_day_ago.strftime('%Y-%m-%d')
+                response = apiInstance.get_historical_candle_data1(
+                    instrument_key=instrument_key,
+                    interval=interval,
+                    unit=unit,
+                    from_date=from_date,
+                    to_date=to_date
+                )
+
+                candles = response.data.candles
+                if not candles:
+                    ist = pytz.timezone('Asia/Kolkata')
+                    today = datetime.now(ist)
+                    to_date = today.strftime('%Y-%m-%d')
+                    three_days_ago = today - timedelta(days=3)
+                    from_date = one_day_ago.strftime('%Y-%m-%d')
+                    response = apiInstance.get_historical_candle_data1(
+                        instrument_key=instrument_key,
+                        interval=interval,
+                        unit=unit,
+                        from_date=from_date,
+                        to_date=to_date
+                    )
+
+                    candles = response.data.candles
+            
+            if not candles:
+                return Response({"Could not get historical data for the symbol"}) 
+
             
             first_candle = candles[0]
 
             ltp = first_candle[4]
 
             return {"ltp": ltp}
-
-
 
         except Exception as e:
             return {"error": f"Exception while fetching LTP: {e}"}
@@ -1588,17 +1646,46 @@ class RoomLeaderboardView(APIView):
             candles = response.data.candles
 
             if not candles:
-                return Response({
-                    "error": "No historical data found for the symbol",
-                    "symbol": symbol
-                }, status=404)
+                ist = pytz.timezone('Asia/Kolkata')
+                today = datetime.now(ist)
+                to_date = today.strftime('%Y-%m-%d')
+                one_day_ago = today - timedelta(days=1)
+                from_date = one_day_ago.strftime('%Y-%m-%d')
+                response = apiInstance.get_historical_candle_data1(
+                    instrument_key=instrument_key,
+                    interval=interval,
+                    unit=unit,
+                    from_date=from_date,
+                    to_date=to_date
+                )
+
+                candles = response.data.candles
+                if not candles:
+                    ist = pytz.timezone('Asia/Kolkata')
+                    today = datetime.now(ist)
+                    to_date = today.strftime('%Y-%m-%d')
+                    three_days_ago = today - timedelta(days=3)
+                    from_date = one_day_ago.strftime('%Y-%m-%d')
+                    response = apiInstance.get_historical_candle_data1(
+                        instrument_key=instrument_key,
+                        interval=interval,
+                        unit=unit,
+                        from_date=from_date,
+                        to_date=to_date
+                    )
+
+                    candles = response.data.candles
+            
+            if not candles:
+                return Response({"Could not get historical data for the symbol"}) 
+
             
             first_candle = candles[0]
 
             ltp = first_candle[4]
 
-            return float(ltp)
-        
+            return {"ltp": ltp}
+
         except Exception as e:
             return {"error": f"Exception while fetching LTP: {e}"}
 
@@ -1929,10 +2016,39 @@ class StockDataView(APIView):
             candles = response.data.candles
 
             if not candles:
-                return Response({
-                    "error": "No historical data found for the symbol",
-                    "symbol": symbol
-                }, status=404)
+                ist = pytz.timezone('Asia/Kolkata')
+                today = datetime.now(ist)
+                to_date = today.strftime('%Y-%m-%d')
+                one_day_ago = today - timedelta(days=1)
+                from_date = one_day_ago.strftime('%Y-%m-%d')
+                response = apiInstance.get_historical_candle_data1(
+                    instrument_key=instrument_key,
+                    interval=interval,
+                    unit=unit,
+                    from_date=from_date,
+                    to_date=to_date
+                )
+
+                candles = response.data.candles
+                if not candles:
+                    ist = pytz.timezone('Asia/Kolkata')
+                    today = datetime.now(ist)
+                    to_date = today.strftime('%Y-%m-%d')
+                    three_days_ago = today - timedelta(days=3)
+                    from_date = one_day_ago.strftime('%Y-%m-%d')
+                    response = apiInstance.get_historical_candle_data1(
+                        instrument_key=instrument_key,
+                        interval=interval,
+                        unit=unit,
+                        from_date=from_date,
+                        to_date=to_date
+                    )
+
+                    candles = response.data.candles
+            
+            if not candles:
+                return Response({"Could not get historical data for the symbol"}) 
+
             
             first_candle = candles[0]
 
@@ -2048,35 +2164,78 @@ class UserPortfolioView(APIView):
         apiInstance = upstox_client.HistoryV3Api()
         instrument_key = self.get_instrument_key(symbol)
 
+
         if not instrument_key:
             return {"error": f"Could not get instrument key for {symbol}"}
         
-        # Try 1-minute data first, then fall back to daily data
-        intervals_to_try = [
-            ("minutes", "1"),
-            ("days", "1")
-        ]
+        interval_map = {
+                "1minute": ("minutes", "1"),
+                "5minute": ("minutes", "5"),
+                "15minute": ("minutes", "15"),
+                "30minute": ("minutes", "30"),
+                "1hour": ("hours", "1"),
+                "day": ("days", "1"),
+                "week": ("weeks", "1"),
+                "month": ("months", "1")
+        }
         
-        for unit, interval in intervals_to_try:
-            try:
-                response = apiInstance.get_intra_day_candle_data(
+        unit, interval = interval_map["1minute"]
+
+
+        try:
+            response = apiInstance.get_intra_day_candle_data(
+                instrument_key=instrument_key,
+                interval=interval, 
+                unit=unit
+            )
+
+            candles = response.data.candles
+
+            if not candles:
+                ist = pytz.timezone('Asia/Kolkata')
+                today = datetime.now(ist)
+                to_date = today.strftime('%Y-%m-%d')
+                one_day_ago = today - timedelta(days=1)
+                from_date = one_day_ago.strftime('%Y-%m-%d')
+                response = apiInstance.get_historical_candle_data1(
                     instrument_key=instrument_key,
-                    interval=interval, 
-                    unit=unit
+                    interval=interval,
+                    unit=unit,
+                    from_date=from_date,
+                    to_date=to_date
                 )
 
                 candles = response.data.candles
+                if not candles:
+                    ist = pytz.timezone('Asia/Kolkata')
+                    today = datetime.now(ist)
+                    to_date = today.strftime('%Y-%m-%d')
+                    three_days_ago = today - timedelta(days=3)
+                    from_date = one_day_ago.strftime('%Y-%m-%d')
+                    response = apiInstance.get_historical_candle_data1(
+                        instrument_key=instrument_key,
+                        interval=interval,
+                        unit=unit,
+                        from_date=from_date,
+                        to_date=to_date
+                    )
 
-                if candles:
-                    first_candle = candles[0]
-                    ltp = first_candle[4]  # Close price
-                    return {"ltp": ltp}
-                    
-            except Exception as e:
-                logger.error(f"Error fetching {unit} data for {symbol}: {e}")
-                continue
-        
-        return {"error": "No historical data found for the symbol"}
+                    candles = response.data.candles
+            
+            if not candles:
+                return Response({"Could not get historical data for the symbol"}) 
+
+            
+            first_candle = candles[0]
+
+            ltp = first_candle[4]
+
+            return {"ltp": ltp}
+
+
+
+        except Exception as e:
+            return {"error": f"Exception while fetching LTP: {e}"}
     def get(self, request, room_id):
         try:
             room = Room.objects.filter(id=room_id).first()
@@ -2216,36 +2375,78 @@ class IntradayOrdersView(APIView):
         apiInstance = upstox_client.HistoryV3Api()
         instrument_key = self.get_instrument_key(symbol)
 
+
         if not instrument_key:
             return {"error": f"Could not get instrument key for {symbol}"}
         
-        # Try 1-minute data first, then fall back to daily data
-        intervals_to_try = [
-            ("minutes", "1"),
-            ("days", "1")
-        ]
+        interval_map = {
+                "1minute": ("minutes", "1"),
+                "5minute": ("minutes", "5"),
+                "15minute": ("minutes", "15"),
+                "30minute": ("minutes", "30"),
+                "1hour": ("hours", "1"),
+                "day": ("days", "1"),
+                "week": ("weeks", "1"),
+                "month": ("months", "1")
+        }
         
-        for unit, interval in intervals_to_try:
-            try:
-                response = apiInstance.get_intra_day_candle_data(
+        unit, interval = interval_map["1minute"]
+
+
+        try:
+            response = apiInstance.get_intra_day_candle_data(
+                instrument_key=instrument_key,
+                interval=interval, 
+                unit=unit
+            )
+
+            candles = response.data.candles
+
+            if not candles:
+                ist = pytz.timezone('Asia/Kolkata')
+                today = datetime.now(ist)
+                to_date = today.strftime('%Y-%m-%d')
+                one_day_ago = today - timedelta(days=1)
+                from_date = one_day_ago.strftime('%Y-%m-%d')
+                response = apiInstance.get_historical_candle_data1(
                     instrument_key=instrument_key,
-                    interval=interval, 
-                    unit=unit
+                    interval=interval,
+                    unit=unit,
+                    from_date=from_date,
+                    to_date=to_date
                 )
 
                 candles = response.data.candles
+                if not candles:
+                    ist = pytz.timezone('Asia/Kolkata')
+                    today = datetime.now(ist)
+                    to_date = today.strftime('%Y-%m-%d')
+                    three_days_ago = today - timedelta(days=3)
+                    from_date = one_day_ago.strftime('%Y-%m-%d')
+                    response = apiInstance.get_historical_candle_data1(
+                        instrument_key=instrument_key,
+                        interval=interval,
+                        unit=unit,
+                        from_date=from_date,
+                        to_date=to_date
+                    )
 
-                if candles:
-                    first_candle = candles[0]
-                    ltp = first_candle[4]  # Close price
-                    return {"ltp": ltp}
-                    
-            except Exception as e:
-                logger.error(f"Error fetching {unit} data for {symbol}: {e}")
-                continue
-        
-        return {"error": "No historical data found for the symbol"}
+                    candles = response.data.candles
+            
+            if not candles:
+                return Response({"Could not get historical data for the symbol"}) 
 
+            
+            first_candle = candles[0]
+
+            ltp = first_candle[4]
+
+            return {"ltp": ltp}
+
+
+
+        except Exception as e:
+            return {"error": f"Exception while fetching LTP: {e}"}
     def get(self, request, room_id):
         try:
             room = Room.objects.filter(id=room_id).first()
@@ -2897,18 +3098,50 @@ class AdminUserRoomDetailsView(APIView):
             candles = response.data.candles
 
             if not candles:
-                return None
+                ist = pytz.timezone('Asia/Kolkata')
+                today = datetime.now(ist)
+                to_date = today.strftime('%Y-%m-%d')
+                one_day_ago = today - timedelta(days=1)
+                from_date = one_day_ago.strftime('%Y-%m-%d')
+                response = apiInstance.get_historical_candle_data1(
+                    instrument_key=instrument_key,
+                    interval=interval,
+                    unit=unit,
+                    from_date=from_date,
+                    to_date=to_date
+                )
+
+                candles = response.data.candles
+                if not candles:
+                    ist = pytz.timezone('Asia/Kolkata')
+                    today = datetime.now(ist)
+                    to_date = today.strftime('%Y-%m-%d')
+                    three_days_ago = today - timedelta(days=3)
+                    from_date = one_day_ago.strftime('%Y-%m-%d')
+                    response = apiInstance.get_historical_candle_data1(
+                        instrument_key=instrument_key,
+                        interval=interval,
+                        unit=unit,
+                        from_date=from_date,
+                        to_date=to_date
+                    )
+
+                    candles = response.data.candles
+            
+            if not candles:
+                return Response({"Could not get historical data for the symbol"}) 
+
             
             first_candle = candles[0]
 
             ltp = first_candle[4]
 
-            return float(ltp)
+            return {"ltp": ltp}
 
 
 
         except Exception as e:
-            return None
+            return {"error": f"Exception while fetching LTP: {e}"}
 
     def get(self, request, room_id, username):
         try:
