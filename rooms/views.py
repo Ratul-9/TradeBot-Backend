@@ -359,7 +359,7 @@ class RoomTradeBuyView(APIView):
                     today = datetime.now(ist)
                     to_date = today.strftime('%Y-%m-%d')
                     three_days_ago = today - timedelta(days=3)
-                    from_date = one_day_ago.strftime('%Y-%m-%d')
+                    from_date = three_days_ago.strftime('%Y-%m-%d')
                     response = apiInstance.get_historical_candle_data1(
                         instrument_key=instrument_key,
                         interval=interval,
@@ -943,7 +943,7 @@ class RoomTradeSellView(APIView):
                     today = datetime.now(ist)
                     to_date = today.strftime('%Y-%m-%d')
                     three_days_ago = today - timedelta(days=3)
-                    from_date = one_day_ago.strftime('%Y-%m-%d')
+                    from_date = three_days_ago.strftime('%Y-%m-%d')
                     response = apiInstance.get_historical_candle_data1(
                         instrument_key=instrument_key,
                         interval=interval,
@@ -1665,7 +1665,7 @@ class RoomLeaderboardView(APIView):
                     today = datetime.now(ist)
                     to_date = today.strftime('%Y-%m-%d')
                     three_days_ago = today - timedelta(days=3)
-                    from_date = one_day_ago.strftime('%Y-%m-%d')
+                    from_date = three_days_ago.strftime('%Y-%m-%d')
                     response = apiInstance.get_historical_candle_data1(
                         instrument_key=instrument_key,
                         interval=interval,
@@ -2035,7 +2035,7 @@ class StockDataView(APIView):
                     today = datetime.now(ist)
                     to_date = today.strftime('%Y-%m-%d')
                     three_days_ago = today - timedelta(days=3)
-                    from_date = one_day_ago.strftime('%Y-%m-%d')
+                    from_date = three_days_ago.strftime('%Y-%m-%d')
                     response = apiInstance.get_historical_candle_data1(
                         instrument_key=instrument_key,
                         interval=interval,
@@ -2211,7 +2211,7 @@ class UserPortfolioView(APIView):
                     today = datetime.now(ist)
                     to_date = today.strftime('%Y-%m-%d')
                     three_days_ago = today - timedelta(days=3)
-                    from_date = one_day_ago.strftime('%Y-%m-%d')
+                    from_date = three_days_ago.strftime('%Y-%m-%d')
                     response = apiInstance.get_historical_candle_data1(
                         instrument_key=instrument_key,
                         interval=interval,
@@ -2422,7 +2422,7 @@ class IntradayOrdersView(APIView):
                     today = datetime.now(ist)
                     to_date = today.strftime('%Y-%m-%d')
                     three_days_ago = today - timedelta(days=3)
-                    from_date = one_day_ago.strftime('%Y-%m-%d')
+                    from_date = three_days_ago.strftime('%Y-%m-%d')
                     response = apiInstance.get_historical_candle_data1(
                         instrument_key=instrument_key,
                         interval=interval,
@@ -3070,7 +3070,6 @@ class AdminUserRoomDetailsView(APIView):
         apiInstance = upstox_client.HistoryV3Api()
         instrument_key = self.get_instrument_key(symbol)
 
-
         if not instrument_key:
             return {"error": f"Could not get instrument key for {symbol}"}
         
@@ -3086,7 +3085,6 @@ class AdminUserRoomDetailsView(APIView):
         }
         
         unit, interval = interval_map["1minute"]
-
 
         try:
             response = apiInstance.get_intra_day_candle_data(
@@ -3117,7 +3115,7 @@ class AdminUserRoomDetailsView(APIView):
                     today = datetime.now(ist)
                     to_date = today.strftime('%Y-%m-%d')
                     three_days_ago = today - timedelta(days=3)
-                    from_date = one_day_ago.strftime('%Y-%m-%d')
+                    from_date = three_days_ago.strftime('%Y-%m-%d')  # Fixed: was using one_day_ago
                     response = apiInstance.get_historical_candle_data1(
                         instrument_key=instrument_key,
                         interval=interval,
@@ -3129,16 +3127,12 @@ class AdminUserRoomDetailsView(APIView):
                     candles = response.data.candles
             
             if not candles:
-                return Response({"Could not get historical data for the symbol"}) 
+                return {"error": "Could not get historical data for the symbol"}
 
-            
             first_candle = candles[0]
-
             ltp = first_candle[4]
 
             return {"ltp": ltp}
-
-
 
         except Exception as e:
             return {"error": f"Exception while fetching LTP: {e}"}
@@ -3181,8 +3175,14 @@ class AdminUserRoomDetailsView(APIView):
             holdings = []
 
             for portfolio in portfolios:
-                current_price = self.get_ltp(portfolio.symbol) or float(portfolio.average_buy_price)
-                current_price = Decimal(str(current_price))
+                # Fix: Handle the dictionary return from get_ltp
+                ltp_response = self.get_ltp(portfolio.symbol)
+                
+                if isinstance(ltp_response, dict) and 'ltp' in ltp_response:
+                    current_price = Decimal(str(ltp_response['ltp']))
+                else:
+                    # Fallback to average buy price if LTP fetch fails
+                    current_price = portfolio.average_buy_price
 
                 investment = portfolio.total_buy_value - portfolio.total_sell_value
                 current_value = portfolio.total_quantity * current_price
@@ -3256,8 +3256,8 @@ class AdminUserRoomDetailsView(APIView):
             }, status=status.HTTP_200_OK)
 
         except Exception as e:
+            logger.error(f"Error in AdminUserRoomDetailsView: {str(e)}")
             return Response({"error": f"An error occurred: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-    
 
 class PendingOrdersView(APIView):
     """
