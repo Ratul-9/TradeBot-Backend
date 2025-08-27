@@ -2468,8 +2468,10 @@ class IntradayOrdersView(APIView):
             short_sell_orders = OrderBook.objects.filter(
                 user=request.user,
                 room=room,
-                is_short_sell=True,  # or 'SHORT_SELL' based on your model
-                # Add additional filters if needed for short sell identification
+                is_short_sell=True,
+                order_status__in=['PENDING', 'EXECUTED']
+            ).exclude(
+                order_status='SQUARED_OFF'
             ).order_by('-order_timestamp')
 
             total_short_sell_value = Decimal('0.00')
@@ -2498,6 +2500,10 @@ class IntradayOrdersView(APIView):
                 total_short_sell_value += order_value
                 total_short_sell_quantity += order.quantity
                 total_potential_pnl += potential_pnl
+
+                days_held = (timezone.now() - order.order_timestamp).days
+                if days_held == 0:
+                    days_held = 1
                 
                 orders_data.append({
                     "order_id": order.id,
@@ -2512,7 +2518,7 @@ class IntradayOrdersView(APIView):
                     "order_status": order.order_status,
                     "order_date": order.order_timestamp.isoformat(),
                     "order_time": order.order_timestamp.strftime('%H:%M:%S'),
-                    "days_held": (timezone.now() - order.order_timestamp).days,
+                    "days_held": days_held,
                 })
 
             # Calculate summary statistics

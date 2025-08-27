@@ -268,7 +268,7 @@ class ShortSellService:
             return False, "weekend"
         
         market_open = time(9, 15)
-        market_close = time(15, 15)
+        market_close = time(16, 0)
         current_time_only = current_time_ist.time()
 
 
@@ -332,15 +332,15 @@ class ShortSellService:
                 order_price = ltp,
                 is_short_sell = False,
                 order_status = OrderBook.EXECUTED,
-                order_timestamp = short_order.order_timestamp,
+                order_timestamp = timezone.now(),
                 execution_timestamp = timezone.now()
             )
 
-            short_order.order_status = OrderBook.EXECUTED
+            short_order.order_status = OrderBook.SQUARED_OFF
             short_order.execution_timestamp = timezone.now()
             short_order.save()
 
-            self.update_portfolio_after_square_off(short_order, pnl_data['net_pnl'])
+            self.update_portfolio_after_square_off(short_order, square_off_order, pnl_data['net_pnl'])
 
             self.update_balance_after_square_off(short_order, pnl_data['net_pnl'])
 
@@ -355,30 +355,49 @@ class ShortSellService:
             return {'success': False, 'error': str(e)}
     
 
-    def update_portfolio_after_square_off(self, short_order, net_pnl):
+    def update_portfolio_after_square_off(self, short_order, square_off_order, net_pnl):
         try:
-            ltp_resp = self.get_ltp(short_order.symbol)
-            ltp = Decimal(str(ltp_resp["ltp"])) 
+            portfolio, created = UserPortfolio.objects.get_or_create(
+                user=short_order.user,
+                room=short_order.room,
+                symbol=short_order.symbol,
+                defaults={
+                    'total_quantity': 0,
+                    'total_buy_value': Decimal('0'),
+                    'total_sell_value': Decimal('0'),
+                    'realized_pnl': Decimal('0'),
+                    'unrealized_pnl': Decimal('0')
+                }
+                
+            )
 
-            portfolio = UserPortfolio.objects.get(user = short_order.user, room=short_order.room, symbol=short_order.symbol)
-            portfolio.total_buy_value += ltp * short_order.quantity
-            portfolio.total_quantity -= short_order.quantity
+            portfolio.total_quantity += short_order.quantity
+            portfolio.total_buy_value += square_off_order.order_price * short_order.quantity
             portfolio.realized_pnl += net_pnl
+
+            if portfolio.total_quantity == 0:
+                portfolio.unrealized_pnl = Decimal('0')
+            
             portfolio.save()
 
         except UserPortfolio.DoesNotExist:
             logger.warning(f"Portfolio not found for {short_order.user.username} - {short_order.symbol}")
     
 
-    def update_balance_after_square_off(self, short_order, net_pnl):
+    def update_balance_after_square_off(self, short_order, ltp, pnl_data):
         try:
             balance = UserBalance.objects.get(user = short_order.user, room=short_order.room)
 
-            balance.available_cash_balance += net_pnl
+            buy_back_cost =     ltp * short_order.quantity
+            balance.available_cash_balance -= buy_back_cost
 
             position_value = short_order.order_price * short_order.quantity
             margin_released = position_value * Decimal('0.02')
             balance.available_cash_balance += margin_released
+
+            balance.available_cash_balance -= pnl_data['borrowing_cost']
+            balance.available_cash_balance -= pnl_data['transaction_cost']
+
             balance.save()
         except UserBalance.DoesNotExist:
             logger.warning(f"Balance not found for {short_order.user.username}")
@@ -424,9 +443,3 @@ def auto_square_off_short_sells():
     
     logger.info(f"Auto square-off completed: {results}")
     return results
-    
-
-
-
-
-     

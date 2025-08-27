@@ -138,13 +138,15 @@ class OrderBook(models.Model):
     EXECUTED = 'EXECUTED'
     CANCELLED = 'CANCELLED'
     TRIGGERED = 'TRIGGERED'
-    PARTIALLY_EXECUTED = 'PARTIALLY_EXECUTED'    
+    PARTIALLY_EXECUTED = 'PARTIALLY_EXECUTED'  
+    SQUARED_OFF = 'Squared off'  
     ORDER_STATUS_CHOICES = [
         (PENDING, 'Pending'),
         (EXECUTED, 'Executed'),
         (CANCELLED, 'Cancelled'),
         (TRIGGERED, 'Triggered'), 
         (PARTIALLY_EXECUTED, 'Partially Executed'),
+        (SQUARED_OFF, 'Squared Off')
     ]
 
     MARKET = 'MARKET'
