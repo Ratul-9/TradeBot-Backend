@@ -357,50 +357,46 @@ class ShortSellService:
 
     def update_portfolio_after_square_off(self, short_order, square_off_order, net_pnl):
         try:
-            portfolio, created = UserPortfolio.objects.get_or_create(
-                user=short_order.user,
-                room=short_order.room,
-                symbol=short_order.symbol,
-                defaults={
-                    'total_quantity': 0,
-                    'total_buy_value': Decimal('0'),
-                    'total_sell_value': Decimal('0'),
-                    'realized_pnl': Decimal('0'),
-                    'unrealized_pnl': Decimal('0')
-                }
-                
+            portfolio = UserPortfolio.objects.get(
+                user=short_order.user, 
+                room=short_order.room, 
+                symbol=short_order.symbol
             )
-
-            portfolio.total_quantity += short_order.quantity
-            portfolio.total_buy_value += square_off_order.order_price * short_order.quantity
-            portfolio.realized_pnl += net_pnl
-
-            if portfolio.total_quantity == 0:
-                portfolio.unrealized_pnl = Decimal('0')
+        
+            # Use the model's method instead of manual updates
+            success = portfolio.cover_short_position(
+                short_order.quantity, 
+                square_off_order.order_price
+            )
+        
+            if not success:
+                logger.error(f"Failed to cover short position - insufficient short quantity")
             
-            portfolio.save()
-
         except UserPortfolio.DoesNotExist:
             logger.warning(f"Portfolio not found for {short_order.user.username} - {short_order.symbol}")
     
 
-    def update_balance_after_square_off(self, short_order, ltp, pnl_data):
+    def update_balance_after_square_off(self, short_order, current_ltp, pnl_data):
         try:
-            balance = UserBalance.objects.get(user = short_order.user, room=short_order.room)
+            balance = UserBalance.objects.get(user=short_order.user, room=short_order.room)
 
-            buy_back_cost =     ltp * short_order.quantity
+            # 1. Deduct the cost of buying back the shares
+            buy_back_cost = current_ltp * short_order.quantity
             balance.available_cash_balance -= buy_back_cost
-
+            
+            # 2. Release the margin that was blocked during short sell
             position_value = short_order.order_price * short_order.quantity
             margin_released = position_value * Decimal('0.02')
             balance.available_cash_balance += margin_released
-
+            
+            # 3. Deduct borrowing costs and transaction costs
             balance.available_cash_balance -= pnl_data['borrowing_cost']
             balance.available_cash_balance -= pnl_data['transaction_cost']
-
+            
             balance.save()
+            
         except UserBalance.DoesNotExist:
-            logger.warning(f"Balance not found for {short_order.user.username}")
+            logger.error(f"Balance not found for {short_order.user.username}")
 
     def bulk_square_off(self, short_orders):
         results = {

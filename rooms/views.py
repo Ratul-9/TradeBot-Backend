@@ -1228,6 +1228,8 @@ class RoomTradeSellView(APIView):
                     # Add proceeds to balance
                     previous_balance = balance.available_cash_balance
                     balance.add_cash(total_proceeds)
+                    margin_required = total_proceeds * Decimal('0.02')
+                    balance.available_cash_balance -= margin_required
 
                     # Create trade record
                     trade = Trade.objects.create(
